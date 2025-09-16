@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thirdparty-jdwp"
+version = "0.0.1"
+description = "JDWP Implementation in Async Python"
+requires-python = ">=3.7"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+#[project.scripts]
+#mycli = "mypackage.cli:main"
