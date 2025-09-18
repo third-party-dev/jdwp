@@ -56,7 +56,6 @@ Boolean = strict_typedef(type("Boolean", (int,), {}))
 Int = strict_typedef(type("Int", (int,), {}))
 Long = strict_typedef(type("Long", (int,), {}))
 ObjectID = strict_typedef(type("ObjectID", (int,), {}))
-#TaggedObjectID = strict_typedef(type("TaggedObjectID", (int,), {}))
 ThreadID = strict_typedef(type("ThreadID", (int,), {}))
 ThreadGroupID = strict_typedef(type("ThreadGroupID", (int,), {}))
 StringID = strict_typedef(type("StringID", (int,), {}))
@@ -134,6 +133,11 @@ class Jdwp():
     def parse_int(data, offset, cast=None):
         value = struct.unpack('>I', data[offset:offset+4])[0], offset + 4
         return (cast(value[0]), value[1]) if cast else value
+    
+    @staticmethod
+    def parse_short(data, offset, cast=None):
+        value = struct.unpack('>H', data[offset:offset+2])[0], offset + 2
+        return (cast(value[0]), value[1]) if cast else value
 
     @staticmethod
     def parse_byte(data, offset, cast=None):
@@ -155,6 +159,85 @@ class Jdwp():
     @staticmethod
     def make_string(str_val: str) -> bytes:
         return Jdwp.make_int(len(str_Val)) + str_val.encode('utf-8')
+
+
+
+#TaggedObjectID = strict_typedef(type("TaggedObjectID", (int,), {}))
+
+
+'''
+ARRAY 91 long
+BYTE 66 byte
+CHAR 67 short
+OBJECT 76 long
+FLOAT 70 int
+DOUBLE 68 long
+INT 73 int
+LONG 74 long
+SHORT 83 short
+VOID 86 nothing
+BOOLEAN 90 byte
+STRING 115 long
+THREAD 116 long
+THREAD_GROUP 103 long
+CLASS_LOADER 108 long
+CLASS_OBJECT 99 long
+'''
+class Tag():
+    ARRAY = 0x5b
+    BYTE = 0x42
+    CHAR = 0x43
+    OBJECT = 0x4c
+    FLOAT = 0x46
+    DOUBLE = 0x44
+    INT = 0x49
+    LONG = 0x4a
+    SHORT = 0x53
+    VOID = 0x56
+    BOOLEAN = 0x5a
+    STRING = 0x73
+    THREAD = 0x74
+    THREAD_GROUP = 0x67
+    CLASS_LOADER = 0x6c
+    CLASS_OBJECT = 0x63
+
+    u0 = [Tag.VOID]
+    u8 = [Tag.BYTE, Tag.BOOLEAN, ]
+    u16 = [Tag.CHAR, Tag.SHORT, ]
+    u32 = [Tag.FLOAT, Tag.INT, ]
+    u64 = [
+        Tag.ARRAY,
+        Tag.OBJECT,
+        Tag.DOUBLE,
+        Tag.LONG,
+        Tag.STRING,
+        Tag.THREAD,
+        Tag.THREAD_GROUP,
+        Tag.CLASS_LOADER,
+        Tag.CLASS_OBJECT,
+    ]
+
+
+# !! Untested.
+class TaggedObjectID(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+    tag: Optional[Byte] = None
+    # Note: Not really sure what to do here yet.
+    objectID: Optional[Long] = None
+
+    def from_bytes(self, data, offset=0) -> Tuple['TaggedObjectID', int]:
+        self.tag, offset = Jdwp.parse_byte(data, offset, Byte)
+        if tag in Tag.u0:
+            return self, offset
+        elif tag in Tag.u8:
+            self.objectID, offset = Jdwp.parse_byte(data, offset, Long)
+        elif tag in Tag.u16:
+            self.objectID, offset = Jdwp.parse_short(data, offset, Long)
+        elif tag in Tag.u32:
+            self.objectID, offset = Jdwp.parse_int(data, offset, Long)
+        elif tag in Tag.u64:
+            self.objectID, offset = Jdwp.parse_long(data, offset, Long)
+        return self, offset
 
 
 class VirtualMachineSet():
@@ -925,38 +1008,65 @@ class ReferenceTypeSet():
         return ConstantPoolReply().from_bytes(data)[0]
 
     
-
 class ClassTypeSet():
 
     def __init__(self, conn):
         self.conn = conn
 
-    async def Superclass(self, clazz: ClassID):
+
+    async def Superclass(self, clazz: ClassID) -> ClassID:
         await self.conn.send(3, 1, data=Jdwp.make_long(clazz))
         data, _, _, _ = await self.conn.recv()
+        return Jdwp.parse_long(data, 0, ClassID)[0]
 
-        offset = 0
-        result = {}
-        result['superclass'], offset = Jdwp.parse_objectid(data, offset)
-        return result
     
-    async def SetValues(self, *args):
-        raise NotImplementedError("SetValues not implemented.")
-        # await self.conn.send(3, 2, data=Jdwp.make_long(clazz))
+    # !! Need to implement untagged value
+    # class SetValuesEntry(BaseModel):
+    #     model_config = ConfigDict(validate_assignment=True)
+    #     fieldID: Optional[FieldID] = None
+    #     value:  Optional[UntaggedValue] = None
 
-    async def InvokeMethod(self, *args):
-        raise NotImplementedError("InvokeMethod not implemented.")
-        # await self.conn.send(3, 3, data=Jdwp.make_long(clazz))
+    #     def to_bytes(self) -> bytes:
+    #         out = [Jdwp.make_long(self.refType), Jdwp.make_int(len(self.fields))]
+    #         out.extend([Jdwp.make_long(fieldID) for fieldID in self.fields])
+    #         return b''.join(out)
+
+
+    # class SetValuesRequest(BaseModel):
+    #     model_config = ConfigDict(validate_assignment=True)
+    #     clazz: ClassID
+    #     values: List[SetValuesEntry] = []
+
+    #     def to_bytes(self) -> bytes:
+    #         out = [Jdwp.make_long(self.refType), Jdwp.make_int(len(self.fields))]
+    #         out.extend([Jdwp.make_long(fieldID) for fieldID in self.fields])
+    #         return b''.join(out)
+
+
+    # async def SetValues(self, *args):
+    #     raise NotImplementedError("SetValues not implemented.")
+    #     # await self.conn.send(3, 2, data=Jdwp.make_long(clazz))
+
+
+    # !! Implement taggedobject
+    # async def InvokeMethod(self, *args):
+    #     raise NotImplementedError("InvokeMethod not implemented.")
+    #     # await self.conn.send(3, 3, data=Jdwp.make_long(clazz))
     
-    async def NewInstance(self, *args):
-        raise NotImplementedError("NewInstance not implemented.")
-        # await self.conn.send(3, 4, data=Jdwp.make_long(clazz))
-    
+
+    # !! Implement taggedobject
+    # async def NewInstance(self, *args):
+    #     raise NotImplementedError("NewInstance not implemented.")
+    #     # await self.conn.send(3, 4, data=Jdwp.make_long(clazz))
+
+
 class ArrayTypeSet():
 
     def __init__(self, conn):
         self.conn = conn
 
+
+    # !! Implement taggedobject
     async def NewInstance(self, arrType, length):
         out = Jdwp.make_long(arrType) + Jdwp.make_int(length)
         await self.conn.send(3, 1, data=out)
