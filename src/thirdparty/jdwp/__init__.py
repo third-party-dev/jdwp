@@ -219,6 +219,7 @@ class Tag():
 
 
 # !! Untested.
+# !! This should only look at object IDs (in contrast to a Value object)
 class TaggedObjectID(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
     tag: Optional[Byte] = None
@@ -226,6 +227,27 @@ class TaggedObjectID(BaseModel):
     objectID: Optional[Long] = None
 
     def from_bytes(self, data, offset=0) -> Tuple['TaggedObjectID', int]:
+        self.tag, offset = Jdwp.parse_byte(data, offset, Byte)
+        if tag in Tag.u0:
+            return self, offset
+        elif tag in Tag.u8:
+            self.objectID, offset = Jdwp.parse_byte(data, offset, Long)
+        elif tag in Tag.u16:
+            self.objectID, offset = Jdwp.parse_short(data, offset, Long)
+        elif tag in Tag.u32:
+            self.objectID, offset = Jdwp.parse_int(data, offset, Long)
+        elif tag in Tag.u64:
+            self.objectID, offset = Jdwp.parse_long(data, offset, Long)
+        return self, offset
+
+# !! Untested.
+class Value(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+    tag: Optional[Byte] = None
+    # Note: Not really sure what to do here yet.
+    objectID: Optional[Long] = None
+
+    def from_bytes(self, data, offset=0) -> Tuple['Value', int]:
         self.tag, offset = Jdwp.parse_byte(data, offset, Byte)
         if tag in Tag.u0:
             return self, offset
@@ -1021,6 +1043,7 @@ class ClassTypeSet():
 
     
     # !! Need to implement untagged value
+    # !! I have no idea what is happening here... do we call GetValues to track value size?
     # class SetValuesEntry(BaseModel):
     #     model_config = ConfigDict(validate_assignment=True)
     #     fieldID: Optional[FieldID] = None
