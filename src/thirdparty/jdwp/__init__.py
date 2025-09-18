@@ -50,37 +50,41 @@ class Jdwp():
         return data, pkt, flags, error_code
     
     @staticmethod
-    def parse_string(data, offset):
+    def parse_string(data, offset, cast=None):
         str_len = struct.unpack('>I', data[offset:offset+4])[0]
         offset += 4
-        return data[offset:offset+str_len].decode('utf-8'), offset + str_len
+        value = (data[offset:offset+str_len].decode('utf-8'), offset + str_len)
+        return (cast(value[0]), value[1]) if cast else value
     
     @staticmethod
-    def parse_objectid(data, offset):
-        return struct.unpack('>Q', data[offset:offset+8])[0], offset + 8
-    
-    @staticmethod
-    def parse_long(data, offset):
-        return struct.unpack('>Q', data[offset:offset+8])[0], offset + 8
-    
-    @staticmethod
-    def parse_byte(data, offset):
-        return data[offset], offset + 1
+    def parse_long(data, offset, cast=None):
+        value = struct.unpack('>Q', data[offset:offset+8])[0], offset + 8
+        return (cast(value[0]), value[1]) if cast else value
 
     @staticmethod
-    def parse_int(data, offset):
-        return struct.unpack('>I', data[offset:offset+4])[0], offset + 4
-    
-    @staticmethod
-    def make_int(val: int):
-        return struct.pack('>I', val)
+    def parse_int(data, offset, cast=None):
+        value = struct.unpack('>I', data[offset:offset+4])[0], offset + 4
+        return (cast(value[0]), value[1]) if cast else value
 
     @staticmethod
-    def make_int(val: int):
+    def parse_byte(data, offset, cast=None):
+        value = data[offset], offset + 1
+        return (cast(value[0]), value[1]) if cast else value
+    
+    @staticmethod
+    def make_long(val: int) -> bytes:
         return struct.pack('>Q', val)
 
     @staticmethod
-    def make_string(str_val: str):
+    def make_int(val: int) -> bytes:
+        return struct.pack('>I', val)
+
+    @staticmethod
+    def make_byte(val: int) -> bytes:
+        return bytes([val])
+
+    @staticmethod
+    def make_string(str_val: str) -> bytes:
         return Jdwp.make_int(len(str_Val)) + str_val.encode('utf-8')
 
 class VirtualMachineSet():
