@@ -15,7 +15,6 @@ from typing import Optional, List, Tuple
 from pydantic import BaseModel, with_config, ConfigDict
 from pydantic_core import core_schema
 import pdb
-from thirdparty.jdwp import Jdwp
 
 
 def strict_typedef(cls):
@@ -74,8 +73,92 @@ String = strict_typedef(type("String", (str,), {}))
 #UntaggedValue = strict_typedef(type("A", (int,), {}))
 
 
+class SuspendPolicy():
+    NONE = 0x0
+    EVENT_THREAD = 0x1
+    ALL = 0x2
+
+class TypeTag():
+    CLASS = 0x1
+    INTERFACE = 0x2
+    ARRAY = 0x3
+
+class EventKind():
+    SINGLE_STEP = 1
+    BREAKPOINT = 2
+    FRAME_POP = 3
+    EXCEPTION = 4
+    USER_DEFINED = 5
+    THREAD_START = 6
+    THREAD_DEATH = 7
+    CLASS_PREPARE = 8
+    CLASS_UNLOAD = 9
+    CLASS_LOAD = 10
+    FIELD_ACCESS = 20
+    FIELD_MODIFICATION = 21
+    EXCEPTION_CATCH = 30
+    METHOD_ENTRY = 40
+    METHOD_EXIT = 41
+    METHOD_EXIT_WITH_RETURN_VALUE = 42
+    MONITOR_CONTENDER_ENTER = 43
+    MONITOR_CONTENDED_ENTERED = 44
+    MONITOR_WAIT = 45
+    MONITOR_WAITED = 46
+    VM_START = 90
+    VM_DEATH = 99
+    VM_DISCONNECTED = 100 # unsent on JDWP
+
+class Tag():
+    ARRAY = 0x5b
+    BYTE = 0x42
+    CHAR = 0x43
+    OBJECT = 0x4c
+    FLOAT = 0x46
+    DOUBLE = 0x44
+    INT = 0x49
+    LONG = 0x4a
+    SHORT = 0x53
+    VOID = 0x56
+    BOOLEAN = 0x5a
+    STRING = 0x73
+    THREAD = 0x74
+    THREAD_GROUP = 0x67
+    CLASS_LOADER = 0x6c
+    CLASS_OBJECT = 0x63
+
+    u0 = [VOID]
+    u8 = [BYTE, BOOLEAN]
+    u16 = [CHAR, SHORT]
+    u32 = [FLOAT, INT]
+    u64 = [
+        ARRAY,
+        OBJECT,
+        DOUBLE,
+        LONG,
+        STRING,
+        THREAD,
+        THREAD_GROUP,
+        CLASS_LOADER,
+        CLASS_OBJECT,
+    ]
+    objs = [
+        OBJECT,
+        STRING,
+        ARRAY,
+        THREAD,
+        THREAD_GROUP,
+        CLASS_LOADER,
+        CLASS_OBJECT,
+    ]
+
+
 class Jdwp():
     HANDSHAKE = b'JDWP-Handshake'
+
+    Tag = Tag
+    EventKind = EventKind
+    TypeTag = TypeTag
+    SuspendPolicy = SuspendPolicy
 
     def __init__(self, host: str = 'localhost', port: int = 8700):
         self.host = host
@@ -176,48 +259,8 @@ class Jdwp():
         return Jdwp.make_int(len(str_Val)) + str_val.encode('utf-8')
 
 
-class Tag():
-    ARRAY = 0x5b
-    BYTE = 0x42
-    CHAR = 0x43
-    OBJECT = 0x4c
-    FLOAT = 0x46
-    DOUBLE = 0x44
-    INT = 0x49
-    LONG = 0x4a
-    SHORT = 0x53
-    VOID = 0x56
-    BOOLEAN = 0x5a
-    STRING = 0x73
-    THREAD = 0x74
-    THREAD_GROUP = 0x67
-    CLASS_LOADER = 0x6c
-    CLASS_OBJECT = 0x63
 
-    u0 = [Tag.VOID]
-    u8 = [Tag.BYTE, Tag.BOOLEAN]
-    u16 = [Tag.CHAR, Tag.SHORT]
-    u32 = [Tag.FLOAT, Tag.INT]
-    u64 = [
-        Tag.ARRAY,
-        Tag.OBJECT,
-        Tag.DOUBLE,
-        Tag.LONG,
-        Tag.STRING,
-        Tag.THREAD,
-        Tag.THREAD_GROUP,
-        Tag.CLASS_LOADER,
-        Tag.CLASS_OBJECT,
-    ]
-    objs = [
-        Tag.OBJECT,
-        Tag.STRING,
-        Tag.ARRAY,
-        Tag.THREAD,
-        Tag.THREAD_GROUP,
-        Tag.CLASS_LOADER,
-        Tag.CLASS_OBJECT,
-    ]
+
 
 
 # !! Untested.
@@ -374,7 +417,7 @@ class VirtualMachineSet():
 
     class ClassesBySignatureReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        classes: List[ClassesBySignatureEntry] = []
+        classes: List['ClassesBySignatureEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['ClassesBySignatureReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -1586,7 +1629,7 @@ class ObjectReferenceSet():
 
         def from_bytes(self, data, offset=0) -> Tuple['MonitorInfoReply', int]:
             self.owner, offset = Jdwp.parse_long(data, offset, ThreadID)
-            self entryCount, offset = Jdwp.parse_int(data, offset, Int)
+            self.entryCount, offset = Jdwp.parse_int(data, offset, Int)
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
                 value, offset = Jdwp.parse_long(data, offset, ThreadID)
@@ -2008,26 +2051,198 @@ class EventRequestSet():
         self.conn = conn
 
 
-    # !! This is really sophisticated. Coming back later.
-    # class SetRequest(BaseModel):
-    #     model_config = ConfigDict(validate_assignment=True)
-    #     eventKind: Optional[Byte] = None
-    #     suspendPolicy: Optional[Byte] = None
 
-    #     modifiers: List[Byte] = None
-        
-        
-    #     def to_bytes(self) -> bytes:
-    #         return b''.join([
-    #             Jdwp.make_long(self.arrayObject),
-    #             Jdwp.make_int(self.firstIndex),
-    #             Jdwp.make_int(self.length),
-    #         ])
+    class SetCountModifier: #1
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(1)
+        count: Optional[Int] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_int(self.count),
+            ])
+
+    class SetConditionalModifier: #2
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(2)
+        exprID: Optional[Int] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_int(self.exprID),
+            ])
     
-    # async def Set(self, request: SetRequest) -> Int:
-    #     await self.conn.send(15, 1, data=request.to_bytes())
-    #     data, _, _, _ = await self.conn.recv()
-    #     return Jdwp.parse_int(data, 0)[0]
+    class SetThreadOnlyModifier: #3
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(3)
+        thread: Optional[ThreadID] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.thread),
+            ])
+
+
+    class SetClassOnlyModifier: #4
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(4)
+        clazz: Optional[ReferenceTypeID] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.clazz),
+            ])
+    
+    class SetClassMatchModifier: #5
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(5)
+        classPattern: Optional[String] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_string(self.classPattern),
+            ])
+    
+    class SetClassExcludeModifier: #6
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(6)
+        classPattern: Optional[String] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_string(self.classPattern),
+            ])
+    
+    class SetLocationOnlyModifier: #7
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(7)
+        loc: Optional[Location] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                loc.to_bytes(),
+            ])
+
+    class SetExceptionOnlyModifier: #8
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(8)
+        exceptionOrNull: Optional[ReferenceTypeID] = None
+        caught: Optional[Boolean] = None
+        uncaught: Optional[Boolean] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.exceptionOrNull),
+                Jdwp.make_byte(self.caught),
+                Jdwp.make_byte(self.uncaught),
+            ])
+        
+    class SetFieldOnlyModifier: #9
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(9)
+        declaring: Optional[ReferenceTypeID] = None
+        fieldID: Optional[FieldID] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.declaring),
+                Jdwp.make_long(self.fieldID),
+            ])
+
+    class SetStepModifier: #10
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(10)
+        thread: Optional[ThreadID] = None
+        size: Optional[Int] = None
+        depth: Optional[Int] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.thread),
+                Jdwp.make_int(self.size),
+                Jdwp.make_int(self.depth),
+            ])
+    
+    class SetInstanceOnlyModifier: #11
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(11)
+        instance: Optional[ObjectID] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_long(self.instance),
+            ])
+    
+    class SetSourceNameMatchModifier: #12
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(12)
+        sourceNamePattern: Optional[String] = None
+
+        def to_bytes(self) -> bytes:
+            return b''.join([
+                Jdwp.make_byte(self.modKind),
+                Jdwp.make_string(self.sourceNamePattern),
+            ])
+    
+    class SetPlatformThreadsOnlyModifier: #13
+        model_config = ConfigDict(validate_assignment=True)
+        modKind: Optional[Int] = Int(13)
+
+        def to_bytes(self) -> bytes:
+            return Jdwp.make_byte(self.modKind)
+
+    SetModifier = {
+        1: SetCountModifier,
+        2: SetConditionalModifier,
+        3: SetThreadOnlyModifier,
+        4: SetClassOnlyModifier,
+        5: SetClassMatchModifier,
+        6: SetClassExcludeModifier,
+        7: SetLocationOnlyModifier,
+        8: SetExceptionOnlyModifier,
+        9: SetFieldOnlyModifier,
+        10: SetStepModifier,
+        11: SetInstanceOnlyModifier,
+        12: SetSourceNameMatchModifier,
+        13: SetPlatformThreadsOnlyModifier,
+    }
+
+    # !! This is really sophisticated. Coming back later.
+    class SetRequest(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = None
+        suspendPolicy: Optional[Byte] = None
+
+        # !! TODO: I'd like to put a base class here.
+        # !! TODO: But we may not be able to if subclass
+        # !! TODO: checked at runtime. Needs investigation.
+        modifiers: List = []
+        
+        def to_bytes(self) -> bytes:
+            out = [
+                Jdwp.make_byte(self.eventKind),
+                Jdwp.make_byte(self.suspendPolicy),
+                Jdwp.make_int(len(self.modifiers)),
+            ]
+            for modifier in self.modifiers:
+                out.append(modifier.to_bytes())
+            return b''.join(out)
+    
+    async def Set(self, request: SetRequest) -> Int:
+        await self.conn.send(15, 1, data=request.to_bytes())
+        data, _, _, _ = await self.conn.recv()
+        return Jdwp.parse_int(data, 0)[0]
 
 
     class ClearRequest(BaseModel):
@@ -2038,7 +2253,7 @@ class EventRequestSet():
         def to_bytes(self) -> bytes:
             return b''.join([Jdwp.make_long(self.eventKind), Jdwp.make_int(self.requestID)])
     
-    async def Set(self, request: ClearRequest) -> None:
+    async def Clear(self, request: ClearRequest) -> None:
         await self.conn.send(15, 2, data=request.to_bytes())
     
 
