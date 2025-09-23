@@ -154,6 +154,7 @@ class Tag():
 
 class Jdwp():
     HANDSHAKE = b'JDWP-Handshake'
+    REPLY_PACKET = 0x80
 
     Tag = Tag
     EventKind = EventKind
@@ -164,6 +165,8 @@ class Jdwp():
         self.host = host
         self.port = port
         self.packet_id = 1
+        self.pending_requests = {}
+        self.event_loop = asyncio.get_running_loop()
 
         self.VirtualMachine = VirtualMachineSet(self)
         self.ReferenceType = ReferenceTypeSet(self)
@@ -183,6 +186,7 @@ class Jdwp():
         self.ClassObjectReference = ClassObjectReferenceSet(self)
         self.Event = EventSet(self)
 
+
     async def start(self):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
         self.writer.write(Jdwp.HANDSHAKE)
@@ -191,28 +195,62 @@ class Jdwp():
         if resp != Jdwp.HANDSHAKE:
             raise RuntimeError("Failed to receive JDWP handshake.")
         
+        asyncio.create_task(self.reader_loop())
+
         return self
 
-    async def send(self, cmdset, cmd, data=b''):
+
+    async def reader_loop(self):
+        while True:
+            data, pkt, flags, error_code = await self.recv()
+
+            if flags & Jdwp.REPLY_PACKET:
+                fut = self.pending_requests.pop(pkt, None)
+                if fut:
+                    fut.set_result((data, pkt, flags, error_code))
+            else:
+                # Incoming event
+                print("EVENT RECEIVED, OMITTING FOR NOW")
+                print(f"  Header: len {len(data)} pkt {pkt} flags {flags} err {error_code}")
+                print(f"  Data: {data.hex()}")
+                #if cmdset == EVENT_COMMAND_SET:
+                #    await event_queue.put(parse_event(payload))
+                #else:
+                #    # handle any other unsolicited command (rare)
+                #    pass
+
+
+    async def send(self, cmdset, cmd, data=b'', expect_reply=False):
         length = 11 + len(data)
         flags = 0x00
         pkt = self.packet_id
         self.packet_id += 1
         packet = struct.pack('>IIBBB', length, pkt, flags, cmdset, cmd) + data
         print(f"Sent Packet: len {length} pkt {pkt} cmdset {cmdset} cmd {cmd}")
+        if expect_reply:
+            self.pending_requests[pkt] = self.event_loop.create_future()
         self.writer.write(packet)
         await self.writer.drain()
+        if expect_reply:
+            return await self.pending_requests[pkt]
+
     
+    async def send_and_recv(self, cmdset, cmd, data=b''):
+        return await self.send(cmdset, cmd, data, True)
+
+
     async def recv(self):
         header = await self.reader.readexactly(11)
         length, pkt, flags, error_code = struct.unpack('>IIBH', header)
         data_length = length - 11
         data = await self.reader.readexactly(data_length)
-        print(f"Recv'd Header: len {length} pkt {pkt} error {error_code}")
+        #print(f"Recv'd Header: len {length} pkt {pkt} flags {flags} error {error_code}")
+        #print(f"Recv'd Data: {data.hex()}")
         if error_code != 0:
             raise RuntimeError(f"JDWP error code {error_code}")
         return data, pkt, flags, error_code
     
+
     @staticmethod
     def parse_string(data, offset, cast=None):
         str_len = struct.unpack('>I', data[offset:offset+4])[0]
@@ -399,8 +437,7 @@ class VirtualMachineSet():
 
 
     async def Version(self) -> VersionReply:
-        await self.conn.send(1, 1)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 1)
         return self.VersionReply().from_bytes(data)[0]
 
 
@@ -430,8 +467,7 @@ class VirtualMachineSet():
 
 
     async def ClassesBySignature(self, signature: String) -> ClassesBySignatureReply:
-        await self.conn.send(1, 2, data=Jdwp.make_string(signature))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 2, data=Jdwp.make_string(signature))
         return self.ClassesBySignatureReply().from_bytes(data)[0]
 
 
@@ -463,8 +499,7 @@ class VirtualMachineSet():
 
 
     async def AllClasses(self) -> AllClassesReply:
-        await self.conn.send(1, 3)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 3)
         return AllClassesReply().from_bytes(data)[0]
     
 
@@ -481,8 +516,7 @@ class VirtualMachineSet():
 
 
     async def AllThreads(self) -> AllClassesReply:
-        await self.conn.send(1, 4)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 4)
         return self.AllThreadsReply().from_bytes(data)[0]
     
 
@@ -499,8 +533,7 @@ class VirtualMachineSet():
 
 
     async def TopLevelThreadGroup(self) -> TopLevelThreadGroupReply:
-        await self.conn.send(1, 5)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 5)
         return self.TopLevelThreadGroupReply().from_bytes(data)[0]
     
 
@@ -526,8 +559,7 @@ class VirtualMachineSet():
 
 
     async def IDSizes(self) -> IDSizesReply:
-        await self.conn.send(1, 7)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 7)
         return self.IDSizesReply().from_bytes(data)[0]
     
 
@@ -545,8 +577,7 @@ class VirtualMachineSet():
 
 
     async def CreateString(self, utf: String) -> StringID:
-        await self.conn.send(1, 11, data=Jdwp.make_string(utf))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 11, data=Jdwp.make_string(utf))
         return Jdwp.parse_long(data, 0, String)[0]
 
 
@@ -572,20 +603,22 @@ class VirtualMachineSet():
 
 
     async def Capabilities(self) -> CapabilitiesReply:
-        await self.conn.send(1, 12)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 12)
         return self.CapabilitiesReply().from_bytes(data)[0]
 
 
     class ClassPathsReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
+        baseDir: Optional[String] = None
         classpaths: List[String] = []
         bootclasspaths: List[String] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['ClassPathsReply', int]:
+            self.baseDir, offset = Jdwp.parse_string(data, offset, String)
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
                 entry, offset = Jdwp.parse_string(data, offset, String)
+                print(entry)
                 self.classpaths = [*self.classpaths, entry]
             
             count, offset = Jdwp.parse_int(data, offset)
@@ -596,8 +629,7 @@ class VirtualMachineSet():
 
 
     async def ClassPaths(self) -> ClassPathsReply:
-        await self.conn.send(1, 13)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 13)
         return self.ClassPathsReply().from_bytes(data)[0]
     
 
@@ -710,8 +742,7 @@ class VirtualMachineSet():
 
 
     async def CapabilitiesNew(self) -> CapabilitiesNewReply:
-        await self.conn.send(1, 17)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 17)
         return self.CapabilitiesNewReply().from_bytes(data)[0]
 
 
@@ -767,8 +798,7 @@ class VirtualMachineSet():
 
 
     async def AllClassesWithGeneric(self) -> AllClassesWithGenericReply:
-        await self.conn.send(1, 20)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 20)
         return self.AllClassesWithGenericReply().from_bytes(data)[0]
 
 
@@ -795,8 +825,7 @@ class VirtualMachineSet():
 
 
     async def InstanceCounts(self, request: InstanceCountsRequest) -> InstanceCountsReply:
-        await self.conn.send(1, 21, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 21, data=request.to_bytes())
         return self.InstanceCountsReply().from_bytes(data)[0]
 
 
@@ -807,20 +836,17 @@ class ReferenceTypeSet():
     
 
     async def Signature(self, refType: ReferenceTypeID) -> String:
-        await self.conn.send(2, 1, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 1, data=Jdwp.make_long(refType))
         return Jdwp.parse_string(data, 0, String)[0]
 
 
     async def ClassLoader(self, refType: ReferenceTypeID) -> ClassLoaderID:
-        await self.conn.send(2, 2, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 2, data=Jdwp.make_long(refType))
         return Jdwp.parse_long(data, 0, ClassLoaderID)[0]
 
     
     async def Modifiers(self, refType: ReferenceTypeID) -> Int:
-        await self.conn.send(2, 3, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 3, data=Jdwp.make_long(refType))
         return Jdwp.parse_int(data, 0, Int)[0]
 
 
@@ -852,8 +878,7 @@ class ReferenceTypeSet():
 
     
     async def Fields(self, refType: ReferenceTypeID) -> FieldsReply:
-        await self.conn.send(2, 4, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 4, data=Jdwp.make_long(refType))
         return self.FieldsReply().from_bytes(data)[0]
 
 
@@ -885,8 +910,7 @@ class ReferenceTypeSet():
 
 
     async def Methods(self, refType: ReferenceTypeID) -> MethodsReply:
-        await self.conn.send(2, 5, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 5, data=Jdwp.make_long(refType))
         return self.MethodsReply().from_bytes(data)[0]
 
     
@@ -916,14 +940,12 @@ class ReferenceTypeSet():
 
 
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        await self.conn.send(1, 6, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 6, data=request.to_bytes())
         return self.GetValuesReply().from_bytes(data)[0]
 
 
     async def SourceFile(self, refType: ReferenceTypeID) -> String:
-        await self.conn.send(2, 7, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 7, data=Jdwp.make_long(refType))
         return Jdwp.parse_string(data, 0, String)[0]
 
 
@@ -951,14 +973,12 @@ class ReferenceTypeSet():
 
     
     async def NestedTypes(self, refType: ReferenceTypeID) -> NestedTypesReply:
-        await self.conn.send(2, 8, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 8, data=Jdwp.make_long(refType))
         return self.NestedTypesReply().from_bytes(data)[0]
     
 
     async def Status(self, refType: ReferenceTypeID):
-        await self.conn.send(2, 9, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 9, data=Jdwp.make_long(refType))
         return Jdwp.parse_int(data, 0, Int)[0]
 
 
@@ -975,20 +995,17 @@ class ReferenceTypeSet():
 
     
     async def Interfaces(self, refType: ReferenceTypeID) -> InterfacesReply:
-        await self.conn.send(2, 10, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 10, data=Jdwp.make_long(refType))
         return self.InterfacesReply().from_bytes(data)[0]
 
 
     async def ClassObject(self, refType: ReferenceTypeID) -> ClassObjectID:
-        await self.conn.send(2, 11, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 11, data=Jdwp.make_long(refType))
         return Jdwp.parse_long(data, 0, ClassObjectID)[0]
     
 
     async def SourceDebugExtension(self, refType: ReferenceTypeID) -> String:
-        await self.conn.send(2, 12, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 12, data=Jdwp.make_long(refType))
         return Jdwp.parse_string(data, 0, String)[0]
 
     
@@ -1004,8 +1021,7 @@ class ReferenceTypeSet():
 
 
     async def SignatureWithGeneric(self, refType: ReferenceTypeID) -> SignatureWithGenericReply:
-        await self.conn.send(2, 13, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 13, data=Jdwp.make_long(refType))
         return self.SignatureWithGenericReply().from_bytes(data)[0]
     
 
@@ -1039,8 +1055,7 @@ class ReferenceTypeSet():
 
 
     async def FieldsWithGeneric(self, refType: ReferenceTypeID) -> FieldsWithGenericReply:
-        await self.conn.send(2, 14, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 14, data=Jdwp.make_long(refType))
         return self.FieldsWithGenericReply().from_bytes(data)[0]
 
 
@@ -1074,8 +1089,7 @@ class ReferenceTypeSet():
 
     
     async def MethodsWithGeneric(self, refType: ReferenceTypeID) -> MethodsWithGenericReply:
-        await self.conn.send(2, 15, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 15, data=Jdwp.make_long(refType))
         return self.MethodsWithGenericReply().from_bytes(data)[0]
 
 
@@ -1101,8 +1115,7 @@ class ReferenceTypeSet():
 
     
     async def Instances(self, request: InstancesRequest) -> InstancesReply:
-        await self.conn.send(1, 16, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(1, 16, data=request.to_bytes())
         return self.InstancesReply().from_bytes(data)[0]
         
     
@@ -1118,8 +1131,7 @@ class ReferenceTypeSet():
 
     
     async def ClassFileVersion(self, refType: ReferenceTypeID) -> ClassFileVersionReply:
-        await self.conn.send(2, 17, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 17, data=Jdwp.make_long(refType))
         return self.ClassFileVersionReply().from_bytes(data)[0]
 
 
@@ -1138,8 +1150,7 @@ class ReferenceTypeSet():
 
     
     async def ConstantPool(self, refType: ReferenceTypeID) -> ConstantPoolReply:
-        await self.conn.send(2, 18, data=Jdwp.make_long(refType))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(2, 18, data=Jdwp.make_long(refType))
         return self.ConstantPoolReply().from_bytes(data)[0]
 
     
@@ -1150,8 +1161,7 @@ class ClassTypeSet():
 
 
     async def Superclass(self, clazz: ClassID) -> ClassID:
-        await self.conn.send(3, 1, data=Jdwp.make_long(clazz))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(3, 1, data=Jdwp.make_long(clazz))
         return Jdwp.parse_long(data, 0, ClassID)[0]
 
     
@@ -1242,8 +1252,7 @@ class ClassTypeSet():
 
 
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        await self.conn.send(3, 3, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(3, 3, data=request.to_bytes())
         return self.InvokeMethodReply().from_bytes(data)[0]
     
 
@@ -1279,8 +1288,7 @@ class ClassTypeSet():
 
 
     async def NewInstance(self, request: NewInstanceRequest) -> NewInstanceReply:
-        await self.conn.send(3, 4, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(3, 4, data=request.to_bytes())
         return self.NewInstanceReply().from_bytes(data)[0]
 
 
@@ -1300,8 +1308,7 @@ class ArrayTypeSet():
 
 
     async def NewInstance(self, request: NewInstanceRequest) -> TaggedObjectID:
-        await self.conn.send(4, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(4, 1, data=request.to_bytes())
         return TaggedObjectID().from_bytes(data)[0]
 
 
@@ -1343,8 +1350,7 @@ class InterfaceTypeSet():
 
 
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        await self.conn.send(5, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(5, 1, data=request.to_bytes())
         return self.InvokeMethodReply().from_bytes(data)[0]
 
 
@@ -1392,8 +1398,7 @@ class MethodSet():
 
     async def LineTable(self, request: LineTableRequest) -> LineTableReply:
         out = Jdwp.make_long(refType) + Jdwp.make_long(methodID)
-        await self.conn.send(6, 1, data=out)
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(6, 1, data=out)
         return self.LineTableReply().from_bytes(data)[0]
     
 
@@ -1438,8 +1443,7 @@ class MethodSet():
 
 
     async def VariableTable(self, request: VariableTableRequest):
-        await self.conn.send(6, 2, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(6, 2, data=request.to_bytes())
         return self.VariableTableReply().from_bytes(data)[0]
 
     
@@ -1465,8 +1469,7 @@ class MethodSet():
 
 
     async def Bytecodes(self, request: BytecodesRequest) -> BytecodesReply:
-        await self.conn.send(6, 3, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(6, 3, data=request.to_bytes())
         return self.BytecodesReply().from_bytes(data)[0]
 
         
@@ -1480,8 +1483,7 @@ class MethodSet():
 
 
     async def IsObsolete(self, request: IsObsoleteRequest) -> Boolean:
-        await self.conn.send(6, 4, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(6, 4, data=request.to_bytes())
         return Jdwp.parse_byte(data, 0, Boolean)[0]
 
 
@@ -1528,8 +1530,7 @@ class MethodSet():
 
 
     async def VariableTableWithGeneric(self, request: VariableTableWithGenericRequest) -> VariableTableWithGenericReply:
-        await self.conn.send(6, 5, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(6, 5, data=request.to_bytes())
         return self.VariableTableWithGenericReply().from_bytes(data)[0]
 
 
@@ -1558,8 +1559,7 @@ class ObjectReferenceSet():
 
 
     async def ReferenceType(self, objectid: ObjectID):
-        await self.conn.send(9, 1, data=Jdwp.make_long(objectid))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 1, data=Jdwp.make_long(objectid))
         return self.ReferenceTypeReply().from_bytes(data)[0]
 
 
@@ -1587,8 +1587,7 @@ class ObjectReferenceSet():
 
     
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        await self.conn.send(9, 2, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 2, data=request.to_bytes())
         return self.GetValuesReply().from_bytes(data)[0]
 
 
@@ -1640,8 +1639,7 @@ class ObjectReferenceSet():
 
 
     async def MonitorInfo(self, objectid: ObjectID) -> MonitorInfoReply:
-        await self.conn.send(9, 5, data=Jdwp.make_long(objectid))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 5, data=Jdwp.make_long(objectid))
         return self.MonitorInfoReply().from_bytes(data)[0]
 
 
@@ -1679,8 +1677,7 @@ class ObjectReferenceSet():
 
 
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        await self.conn.send(9, 6, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 6, data=request.to_bytes())
         return self.InvokeMethodReply().from_bytes(data)[0]
 
     
@@ -1693,8 +1690,7 @@ class ObjectReferenceSet():
         
     
     async def IsCollected(self, objectid: ObjectID) -> Boolean:
-        await self.conn.send(9, 9, data=Jdwp.make_long(objectid))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 9, data=Jdwp.make_long(objectid))
         return Jdwp.parse_byte(data, 0, Boolean)[0]
 
 
@@ -1720,8 +1716,7 @@ class ObjectReferenceSet():
 
     
     async def ReferringObjects(self, request: ReferringObjectsRequest) -> ReferringObjectsReply:
-        await self.conn.send(9, 10, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(9, 10, data=request.to_bytes())
         return self.ReferringObjectsReply().from_bytes(data)[0]
 
 
@@ -1731,8 +1726,7 @@ class StringReferenceSet():
         self.conn = conn
 
     async def IsCollected(self, stringObject: ObjectID) -> String:
-        await self.conn.send(10, 1, data=Jdwp.make_long(stringObject))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(10, 1, data=Jdwp.make_long(stringObject))
         return Jdwp.parse_string(data, 0, String)[0]
 
 
@@ -1742,8 +1736,7 @@ class ThreadReferenceSet():
         self.conn = conn
 
     async def Name(self, thread: ThreadID) -> String:
-        await self.conn.send(11, 1, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 1, data=Jdwp.make_long(thread))
         return Jdwp.parse_string(data, 0, String)[0]
     
 
@@ -1767,14 +1760,12 @@ class ThreadReferenceSet():
 
 
     async def Status(self, thread: ThreadID) -> StatusReply:
-        await self.conn.send(11, 4, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 4, data=Jdwp.make_long(thread))
         return self.StatusReply().from_bytes(data)[0]
     
 
     async def ThreadGroup(self, thread: ThreadID) -> ThreadGroupID:
-        await self.conn.send(11, 5, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 5, data=Jdwp.make_long(thread))
         return Jdwp.parse_long(data, 0, ThreadGroupID)[0]
 
 
@@ -1816,14 +1807,12 @@ class ThreadReferenceSet():
     
 
     async def Frames(self, request: FeamesRequest) -> FramesReply:
-        await self.conn.send(11, 6, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 6, data=request.to_bytes())
         return self.FramesReply().from_bytes(data)[0]
     
 
     async def FrameCount(self, thread: ThreadID) -> Int:
-        await self.conn.send(11, 7, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 7, data=Jdwp.make_long(thread))
         return Jdwp.parse_int(data, 0, Int)[0]
     
 
@@ -1840,14 +1829,12 @@ class ThreadReferenceSet():
 
 
     async def OwnedMonitors(self, thread: ThreadID) -> OwnedMonitorsReply:
-        await self.conn.send(11, 8, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
         return self.OwnedMonitorsReply().from_bytes(data)[0]
 
     
     async def CurrentContendedMonitor(self, thread: ThreadID) -> TaggedObjectID:
-        await self.conn.send(11, 8, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
         return TaggedObjectID().from_bytes(data)[0]
 
 
@@ -1872,8 +1859,7 @@ class ThreadReferenceSet():
 
 
     async def SuspendCount(self, thread: ThreadID) -> Int:
-        await self.conn.send(11, 8, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
         return Jdwp.parse_int(data, 0, Int)[0]
 
 
@@ -1901,8 +1887,7 @@ class ThreadReferenceSet():
 
     
     async def OwnedMonitorsStackDepthInfo(self, thread: ThreadID) -> OwnedMonitorsStackDepthInfoReply:
-        await self.conn.send(11, 13, data=Jdwp.make_long(thread))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(11, 13, data=Jdwp.make_long(thread))
         return self.OwnedMonitorsStackDepthInfoReply().from_bytes(data)[0]
     
 
@@ -1926,14 +1911,12 @@ class ThreadGroupReferenceSet():
 
 
     async def Name(self, group: ThreadGroupID) -> String:
-        await self.conn.send(12, 1, data=Jdwp.make_long(group))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(12, 1, data=Jdwp.make_long(group))
         return Jdwp.parse_string(data, offset, String)[0]
 
     
     async def Parent(self, group: ThreadGroupID) -> String:
-        await self.conn.send(12, 2, data=Jdwp.make_long(group))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(12, 2, data=Jdwp.make_long(group))
         return Jdwp.parse_long(data, offset, ThreadGroupID)[0]
 
 
@@ -1956,8 +1939,7 @@ class ThreadGroupReferenceSet():
 
     
     async def Children(self, group: ThreadGroupID) -> ChildrenReply:
-        await self.conn.send(12, 3, data=Jdwp.make_long(group))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(12, 3, data=Jdwp.make_long(group))
         return self.ChildrenReply().from_bytes(data)[0]
     
 
@@ -1968,8 +1950,7 @@ class ArrayReferenceSet():
     
 
     async def Length(self, arrayObject: ArrayID) -> Int:
-        await self.conn.send(13, 1, data=Jdwp.make_long(arrayObject))
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(13, 1, data=Jdwp.make_long(arrayObject))
         return Jdwp.parse_int(data, offset, Int)[0]
 
 
@@ -1988,8 +1969,7 @@ class ArrayReferenceSet():
 
 
     async def GetValues(self, request: GetValuesRequest) -> ArrayRegion:
-        await self.conn.send(13, 2, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(13, 2, data=request.to_bytes())
         return self.ArrayRegion().from_bytes(data)[0]
 
 
@@ -2042,8 +2022,7 @@ class ClassLoaderReferenceSet():
 
 
     async def VisibleClasses(self, classLoaderObject: ClassLoaderID) -> VisibleClassesReply:
-        await self.conn.send(14, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(14, 1, data=request.to_bytes())
         return self.VisibleClassesReply().from_bytes(data)[0]
 
 
@@ -2242,9 +2221,8 @@ class EventRequestSet():
             return b''.join(out)
     
     async def Set(self, request: SetRequest) -> Int:
-        await self.conn.send(15, 1, data=request.to_bytes())
-        #data, _, _, _ = await self.conn.recv()
-        #return Jdwp.parse_int(data, 0)[0]
+        data, _, _, _ = await self.conn.send_and_recv(15, 1, data=request.to_bytes())
+        return Jdwp.parse_int(data, 0)[0]
 
 
     class ClearRequest(BaseModel):
@@ -2307,8 +2285,7 @@ class StackFrameSet():
 
     
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        await self.conn.send(16, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(16, 1, data=request.to_bytes())
         return self.GetValuesReply().from_bytes(data)[0]
 
 
@@ -2351,8 +2328,7 @@ class StackFrameSet():
 
     
     async def ThisObject(self, request: ThisObjectRequest) -> TaggedObjectID:
-        await self.conn.send(16, 3, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(16, 3, data=request.to_bytes())
         return TaggedObjectID().from_bytes(data)[0]
 
 
@@ -2387,8 +2363,7 @@ class ClassObjectReferenceSet():
 
     
     async def ReflectedType(self, classObject: ClassObjectID) -> ReflectedTypeReply:
-        await self.conn.send(17, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
+        data, _, _, _ = await self.conn.send_and_recv(17, 1, data=request.to_bytes())
         return self.ReflectedTypeReply().from_bytes(data)[0]
 
 
