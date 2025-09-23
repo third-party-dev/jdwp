@@ -199,6 +199,7 @@ class Jdwp():
         pkt = self.packet_id
         self.packet_id += 1
         packet = struct.pack('>IIBBB', length, pkt, flags, cmdset, cmd) + data
+        print(f"Sent Packet: len {length} pkt {pkt} cmdset {cmdset} cmd {cmd}")
         self.writer.write(packet)
         await self.writer.drain()
     
@@ -207,6 +208,7 @@ class Jdwp():
         length, pkt, flags, error_code = struct.unpack('>IIBH', header)
         data_length = length - 11
         data = await self.reader.readexactly(data_length)
+        print(f"Recv'd Header: len {length} pkt {pkt} error {error_code}")
         if error_code != 0:
             raise RuntimeError(f"JDWP error code {error_code}")
         return data, pkt, flags, error_code
@@ -256,7 +258,7 @@ class Jdwp():
 
     @staticmethod
     def make_string(str_val: str) -> bytes:
-        return Jdwp.make_int(len(str_Val)) + str_val.encode('utf-8')
+        return Jdwp.make_int(len(str_val)) + str_val.encode('utf-8')
 
 
 
@@ -387,7 +389,7 @@ class VirtualMachineSet():
         vmVersion: Optional[String] = None
         vmName: Optional[String] = None
 
-        def from_bytes(self, data, offset) -> Tuple['VersionReply', int]:
+        def from_bytes(self, data, offset=0) -> Tuple['VersionReply', int]:
             self.description, offset = Jdwp.parse_string(data, offset, String)
             self.jdwpMajor, offset = Jdwp.parse_int(data, offset, Int)
             self.jdwpMinor, offset = Jdwp.parse_int(data, offset, Int)
@@ -399,7 +401,7 @@ class VirtualMachineSet():
     async def Version(self) -> VersionReply:
         await self.conn.send(1, 1)
         data, _, _, _ = await self.conn.recv()
-        return VersionReply().from_bytes(data)[0]
+        return self.VersionReply().from_bytes(data)[0]
 
 
     class ClassesBySignatureEntry(BaseModel):
@@ -430,7 +432,7 @@ class VirtualMachineSet():
     async def ClassesBySignature(self, signature: String) -> ClassesBySignatureReply:
         await self.conn.send(1, 2, data=Jdwp.make_string(signature))
         data, _, _, _ = await self.conn.recv()
-        return ClassesBySignatureReply().from_bytes(data)[0]
+        return self.ClassesBySignatureReply().from_bytes(data)[0]
 
 
     class AllClassesEntry(BaseModel):
@@ -450,7 +452,7 @@ class VirtualMachineSet():
 
     class AllClassesReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        classes: List[AllClassesEntry] = []
+        classes: List['AllClassesEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['AllClassesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -481,7 +483,7 @@ class VirtualMachineSet():
     async def AllThreads(self) -> AllClassesReply:
         await self.conn.send(1, 4)
         data, _, _, _ = await self.conn.recv()
-        return AllThreadsReply().from_bytes(data)[0]
+        return self.AllThreadsReply().from_bytes(data)[0]
     
 
     class TopLevelThreadGroupReply(BaseModel):
@@ -499,7 +501,7 @@ class VirtualMachineSet():
     async def TopLevelThreadGroup(self) -> TopLevelThreadGroupReply:
         await self.conn.send(1, 5)
         data, _, _, _ = await self.conn.recv()
-        return TopLevelThreadGroupReply().from_bytes(data)
+        return self.TopLevelThreadGroupReply().from_bytes(data)[0]
     
 
     async def Dispose(self) -> None:
@@ -514,7 +516,7 @@ class VirtualMachineSet():
         referenceTypeIDSize: Optional[Int] = None
         frameIDSize: Optional[Int] = None
 
-        def from_bytes(self, data, offset) -> Tuple['IDSizesReply', int]:
+        def from_bytes(self, data, offset=0) -> Tuple['IDSizesReply', int]:
             self.fieldIDSize, offset = Jdwp.parse_int(data, offset, Int)
             self.methodIDSize, offset = Jdwp.parse_int(data, offset, Int)
             self.objectIDSize, offset = Jdwp.parse_int(data, offset, Int)
@@ -526,7 +528,7 @@ class VirtualMachineSet():
     async def IDSizes(self) -> IDSizesReply:
         await self.conn.send(1, 7)
         data, _, _, _ = await self.conn.recv()
-        return IDSizesReply().from_bytes(data)[0]
+        return self.IDSizesReply().from_bytes(data)[0]
     
 
     async def Suspend(self) -> None:
@@ -572,7 +574,7 @@ class VirtualMachineSet():
     async def Capabilities(self) -> CapabilitiesReply:
         await self.conn.send(1, 12)
         data, _, _, _ = await self.conn.recv()
-        return CapabilitiesReply().from_bytes(data)[0]
+        return self.CapabilitiesReply().from_bytes(data)[0]
 
 
     class ClassPathsReply(BaseModel):
@@ -596,7 +598,7 @@ class VirtualMachineSet():
     async def ClassPaths(self) -> ClassPathsReply:
         await self.conn.send(1, 13)
         data, _, _, _ = await self.conn.recv()
-        return ClassPathsReply().from_bytes(data)
+        return self.ClassPathsReply().from_bytes(data)[0]
     
 
     class DisposeObjectsEntry(BaseModel):
@@ -613,7 +615,7 @@ class VirtualMachineSet():
 
     class DisposeObjectsRequest(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        requests: List[DisposeObjectsEntry] = []
+        requests: List['DisposeObjectsEntry'] = []
 
         def to_bytes(self) -> bytes:
             out = [Jdwp.make_int(len(self.requests))]
@@ -710,7 +712,7 @@ class VirtualMachineSet():
     async def CapabilitiesNew(self) -> CapabilitiesNewReply:
         await self.conn.send(1, 17)
         data, _, _, _ = await self.conn.recv()
-        return CapabilitiesNewReply().from_bytes(data)
+        return self.CapabilitiesNewReply().from_bytes(data)[0]
 
 
     class RedefineClassesRequest(BaseModel):
@@ -754,12 +756,12 @@ class VirtualMachineSet():
 
     class AllClassesWithGenericReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        classes: List[AllClassesWithGenericEntry] = []
+        classes: List['AllClassesWithGenericEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['AllClassesWithGenericReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                entry, offset = AllClassesWithGenericEntry().from_bytes(data, offset)
+                entry, offset = VirtualMachineSet.AllClassesWithGenericEntry().from_bytes(data, offset)
                 self.classes = [*self.classes, entry]
             return self, offset
 
@@ -767,7 +769,7 @@ class VirtualMachineSet():
     async def AllClassesWithGeneric(self) -> AllClassesWithGenericReply:
         await self.conn.send(1, 20)
         data, _, _, _ = await self.conn.recv()
-        return AllClassesWithGenericReply().from_bytes(data)
+        return self.AllClassesWithGenericReply().from_bytes(data)[0]
 
 
     class InstanceCountsRequest(BaseModel):
@@ -795,7 +797,7 @@ class VirtualMachineSet():
     async def InstanceCounts(self, request: InstanceCountsRequest) -> InstanceCountsReply:
         await self.conn.send(1, 21, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return InstanceCountsReply().from_bytes(data)
+        return self.InstanceCountsReply().from_bytes(data)[0]
 
 
 class ReferenceTypeSet():
@@ -839,7 +841,7 @@ class ReferenceTypeSet():
 
     class FieldsReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        declared: List[FieldsDeclaredEntry] = []
+        declared: List['FieldsDeclaredEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['FieldsReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -852,7 +854,7 @@ class ReferenceTypeSet():
     async def Fields(self, refType: ReferenceTypeID) -> FieldsReply:
         await self.conn.send(2, 4, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return FieldsReply().from_bytes(data)[0]
+        return self.FieldsReply().from_bytes(data)[0]
 
 
     class MethodsDeclaredEntry(BaseModel):
@@ -872,7 +874,7 @@ class ReferenceTypeSet():
 
     class MethodsReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        declared: List[MethodsDeclaredEntry] = []
+        declared: List['MethodsDeclaredEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['MethodsReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -885,7 +887,7 @@ class ReferenceTypeSet():
     async def Methods(self, refType: ReferenceTypeID) -> MethodsReply:
         await self.conn.send(2, 5, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return MethodsReply().from_bytes(data)[0]
+        return self.MethodsReply().from_bytes(data)[0]
 
     
     # !! Need to implement TaggedValues
@@ -916,7 +918,7 @@ class ReferenceTypeSet():
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
         await self.conn.send(1, 6, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return GetValuesReply().from_bytes(data)[0]
+        return self.GetValuesReply().from_bytes(data)[0]
 
 
     async def SourceFile(self, refType: ReferenceTypeID) -> String:
@@ -938,7 +940,7 @@ class ReferenceTypeSet():
 
     class NestedTypesReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        classes: List[NestedTypesEntry] = []
+        classes: List['NestedTypesEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['NestedTypesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -951,7 +953,7 @@ class ReferenceTypeSet():
     async def NestedTypes(self, refType: ReferenceTypeID) -> NestedTypesReply:
         await self.conn.send(2, 8, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return NestedTypesReply().from_bytes(data)[0]
+        return self.NestedTypesReply().from_bytes(data)[0]
     
 
     async def Status(self, refType: ReferenceTypeID):
@@ -975,7 +977,7 @@ class ReferenceTypeSet():
     async def Interfaces(self, refType: ReferenceTypeID) -> InterfacesReply:
         await self.conn.send(2, 10, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return InterfacesReply().from_bytes(data)[0]
+        return self.InterfacesReply().from_bytes(data)[0]
 
 
     async def ClassObject(self, refType: ReferenceTypeID) -> ClassObjectID:
@@ -1004,7 +1006,7 @@ class ReferenceTypeSet():
     async def SignatureWithGeneric(self, refType: ReferenceTypeID) -> SignatureWithGenericReply:
         await self.conn.send(2, 13, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return SignatureWithGenericReply().from_bytes(data)[0]
+        return self.SignatureWithGenericReply().from_bytes(data)[0]
     
 
     class FieldsWithGenericEntry(BaseModel):
@@ -1026,7 +1028,7 @@ class ReferenceTypeSet():
 
     class FieldsWithGenericReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        declared: List[FieldsWithGenericEntry] = []
+        declared: List['FieldsWithGenericEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['FieldsWithGenericReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -1039,7 +1041,7 @@ class ReferenceTypeSet():
     async def FieldsWithGeneric(self, refType: ReferenceTypeID) -> FieldsWithGenericReply:
         await self.conn.send(2, 14, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return FieldsWithGenericReply().from_bytes(data)[0]
+        return self.FieldsWithGenericReply().from_bytes(data)[0]
 
 
     class MethodsWithGenericEntry(BaseModel):
@@ -1061,7 +1063,7 @@ class ReferenceTypeSet():
 
     class MethodsWithGenericReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        declared: List[MethodsWithGenericEntry] = []
+        declared: List['MethodsWithGenericEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['MethodsWithGenericReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -1074,7 +1076,7 @@ class ReferenceTypeSet():
     async def MethodsWithGeneric(self, refType: ReferenceTypeID) -> MethodsWithGenericReply:
         await self.conn.send(2, 15, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return MethodsWithGenericReply().from_bytes(data)[0]
+        return self.MethodsWithGenericReply().from_bytes(data)[0]
 
 
     class InstancesRequest(BaseModel):
@@ -1101,7 +1103,7 @@ class ReferenceTypeSet():
     async def Instances(self, request: InstancesRequest) -> InstancesReply:
         await self.conn.send(1, 16, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return InstancesReply().from_bytes(data)[0]
+        return self.InstancesReply().from_bytes(data)[0]
         
     
     class ClassFileVersionReply(BaseModel):
@@ -1118,7 +1120,7 @@ class ReferenceTypeSet():
     async def ClassFileVersion(self, refType: ReferenceTypeID) -> ClassFileVersionReply:
         await self.conn.send(2, 17, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return ClassFileVersionReply().from_bytes(data)[0]
+        return self.ClassFileVersionReply().from_bytes(data)[0]
 
 
     class ConstantPoolReply(BaseModel):
@@ -1138,7 +1140,7 @@ class ReferenceTypeSet():
     async def ConstantPool(self, refType: ReferenceTypeID) -> ConstantPoolReply:
         await self.conn.send(2, 18, data=Jdwp.make_long(refType))
         data, _, _, _ = await self.conn.recv()
-        return ConstantPoolReply().from_bytes(data)[0]
+        return self.ConstantPoolReply().from_bytes(data)[0]
 
     
 class ClassTypeSet():
@@ -1181,7 +1183,7 @@ class ClassTypeSet():
     # class SetValuesRequest(BaseModel):
     #     model_config = ConfigDict(validate_assignment=True)
     #     clazz: ClassID
-    #     values: List[SetValuesEntry] = []
+    #     values: List['SetValuesEntry'] = []
 
     #     def to_bytes(self) -> bytes:
     #         out = [Jdwp.make_long(self.refType), Jdwp.make_int(len(self.fields))]
@@ -1242,7 +1244,7 @@ class ClassTypeSet():
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
         await self.conn.send(3, 3, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return InvokeMethodReply().from_bytes(data)[0]
+        return self.InvokeMethodReply().from_bytes(data)[0]
     
 
     class NewInstanceRequest(BaseModel):
@@ -1279,7 +1281,7 @@ class ClassTypeSet():
     async def NewInstance(self, request: NewInstanceRequest) -> NewInstanceReply:
         await self.conn.send(3, 4, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return NewInstanceReply().from_bytes(data)[0]
+        return self.NewInstanceReply().from_bytes(data)[0]
 
 
 class ArrayTypeSet():
@@ -1343,7 +1345,7 @@ class InterfaceTypeSet():
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
         await self.conn.send(5, 1, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return InvokeMethodReply().from_bytes(data)[0]
+        return self.InvokeMethodReply().from_bytes(data)[0]
 
 
 class MethodSet():
@@ -1376,7 +1378,7 @@ class MethodSet():
         model_config = ConfigDict(validate_assignment=True)
         start: Optional[Long] = None
         end: Optional[Long] = None
-        lines: List[LineTableEntry] = []
+        lines: List['LineTableEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['LineTableReply', int]:
             self.start, offset = Jdwp.parse_long(data, offset, Long)
@@ -1392,7 +1394,7 @@ class MethodSet():
         out = Jdwp.make_long(refType) + Jdwp.make_long(methodID)
         await self.conn.send(6, 1, data=out)
         data, _, _, _ = await self.conn.recv()
-        return LineTableReply().from_bytes(data)[0]
+        return self.LineTableReply().from_bytes(data)[0]
     
 
     class VariableTableRequest(BaseModel):
@@ -1424,7 +1426,7 @@ class MethodSet():
     class VariableTableReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         argCnt: Optional[Long] = None
-        slots: List[VariableTableEntry] = []
+        slots: List['VariableTableEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['VariableTableReply', int]:
             self.argCnt, offset = Jdwp.parse_int(data, offset, Int)
@@ -1438,7 +1440,7 @@ class MethodSet():
     async def VariableTable(self, request: VariableTableRequest):
         await self.conn.send(6, 2, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return VariableTableReply().from_bytes(data)[0]
+        return self.VariableTableReply().from_bytes(data)[0]
 
     
     class BytecodesRequest(BaseModel):
@@ -1465,7 +1467,7 @@ class MethodSet():
     async def Bytecodes(self, request: BytecodesRequest) -> BytecodesReply:
         await self.conn.send(6, 3, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return BytecodesReply().from_bytes(data)[0]
+        return self.BytecodesReply().from_bytes(data)[0]
 
         
     class IsObsoleteRequest(BaseModel):
@@ -1514,7 +1516,7 @@ class MethodSet():
     class VariableTableWithGenericReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         argCnt: Optional[Long] = None
-        slots: List[VariableTableWithGenericEntry] = []
+        slots: List['VariableTableWithGenericEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['VariableTableWithGenericReply', int]:
             self.argCnt, offset = Jdwp.parse_int(data, offset, Int)
@@ -1528,7 +1530,7 @@ class MethodSet():
     async def VariableTableWithGeneric(self, request: VariableTableWithGenericRequest) -> VariableTableWithGenericReply:
         await self.conn.send(6, 5, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return VariableTableWithGenericReply().from_bytes(data)[0]
+        return self.VariableTableWithGenericReply().from_bytes(data)[0]
 
 
 # Note: Empty set in specification.
@@ -1558,7 +1560,7 @@ class ObjectReferenceSet():
     async def ReferenceType(self, objectid: ObjectID):
         await self.conn.send(9, 1, data=Jdwp.make_long(objectid))
         data, _, _, _ = await self.conn.recv()
-        return ReferenceTypeReply().from_bytes(data)[0]
+        return self.ReferenceTypeReply().from_bytes(data)[0]
 
 
     class GetValuesRequest(BaseModel):
@@ -1587,7 +1589,7 @@ class ObjectReferenceSet():
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
         await self.conn.send(9, 2, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return GetValuesReply().from_bytes(data)[0]
+        return self.GetValuesReply().from_bytes(data)[0]
 
 
 
@@ -1640,7 +1642,7 @@ class ObjectReferenceSet():
     async def MonitorInfo(self, objectid: ObjectID) -> MonitorInfoReply:
         await self.conn.send(9, 5, data=Jdwp.make_long(objectid))
         data, _, _, _ = await self.conn.recv()
-        return MonitorInfoReply().from_bytes(data)[0]
+        return self.MonitorInfoReply().from_bytes(data)[0]
 
 
     class InvokeMethodRequest(BaseModel):
@@ -1679,7 +1681,7 @@ class ObjectReferenceSet():
     async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
         await self.conn.send(9, 6, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return InvokeMethodReply().from_bytes(data)[0]
+        return self.InvokeMethodReply().from_bytes(data)[0]
 
     
     async def DisableCollection(self, objectid: ObjectID):
@@ -1720,7 +1722,7 @@ class ObjectReferenceSet():
     async def ReferringObjects(self, request: ReferringObjectsRequest) -> ReferringObjectsReply:
         await self.conn.send(9, 10, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return ReferringObjectsReply().from_bytes(data)[0]
+        return self.ReferringObjectsReply().from_bytes(data)[0]
 
 
 class StringReferenceSet():
@@ -1767,7 +1769,7 @@ class ThreadReferenceSet():
     async def Status(self, thread: ThreadID) -> StatusReply:
         await self.conn.send(11, 4, data=Jdwp.make_long(thread))
         data, _, _, _ = await self.conn.recv()
-        return StatusReply().from_bytes(data)[0]
+        return self.StatusReply().from_bytes(data)[0]
     
 
     async def ThreadGroup(self, thread: ThreadID) -> ThreadGroupID:
@@ -1792,8 +1794,8 @@ class ThreadReferenceSet():
 
     class FramesEntry(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        frameID = Optional[FrameID] = None
-        location = Optional[Location] = None
+        frameID: Optional[FrameID] = None
+        location: Optional[Location] = None
         
         def from_bytes(self, data, offset=0) -> Tuple['FramesEntry', int]:
             self.frameID, offset = Jdwp.parse_long(data, offset, FrameID)
@@ -1803,7 +1805,7 @@ class ThreadReferenceSet():
 
     class FramesReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        frames: List[FramesEntry] = []
+        frames: List['FramesEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['FramesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -1816,7 +1818,7 @@ class ThreadReferenceSet():
     async def Frames(self, request: FeamesRequest) -> FramesReply:
         await self.conn.send(11, 6, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return FramesReply().from_bytes(data)[0]
+        return self.FramesReply().from_bytes(data)[0]
     
 
     async def FrameCount(self, thread: ThreadID) -> Int:
@@ -1840,7 +1842,7 @@ class ThreadReferenceSet():
     async def OwnedMonitors(self, thread: ThreadID) -> OwnedMonitorsReply:
         await self.conn.send(11, 8, data=Jdwp.make_long(thread))
         data, _, _, _ = await self.conn.recv()
-        return OwnedMonitorsReply().from_bytes(data)[0]
+        return self.OwnedMonitorsReply().from_bytes(data)[0]
 
     
     async def CurrentContendedMonitor(self, thread: ThreadID) -> TaggedObjectID:
@@ -1888,7 +1890,7 @@ class ThreadReferenceSet():
 
     class OwnedMonitorsStackDepthInfoReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        owned: List[OwnedMonitorsStackDepthInfoEntry] = []
+        owned: List['OwnedMonitorsStackDepthInfoEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['OwnedMonitorsStackDepthInfoReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -1901,7 +1903,7 @@ class ThreadReferenceSet():
     async def OwnedMonitorsStackDepthInfo(self, thread: ThreadID) -> OwnedMonitorsStackDepthInfoReply:
         await self.conn.send(11, 13, data=Jdwp.make_long(thread))
         data, _, _, _ = await self.conn.recv()
-        return OwnedMonitorsStackDepthInfoReply().from_bytes(data)[0]
+        return self.OwnedMonitorsStackDepthInfoReply().from_bytes(data)[0]
     
 
     class ForceEarlyReturnRequest(BaseModel):
@@ -1956,7 +1958,7 @@ class ThreadGroupReferenceSet():
     async def Children(self, group: ThreadGroupID) -> ChildrenReply:
         await self.conn.send(12, 3, data=Jdwp.make_long(group))
         data, _, _, _ = await self.conn.recv()
-        return ChildrenReply().from_bytes(data)[0]
+        return self.ChildrenReply().from_bytes(data)[0]
     
 
 class ArrayReferenceSet():
@@ -1988,7 +1990,7 @@ class ArrayReferenceSet():
     async def GetValues(self, request: GetValuesRequest) -> ArrayRegion:
         await self.conn.send(13, 2, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return ArrayRegion().from_bytes(data)[0]
+        return self.ArrayRegion().from_bytes(data)[0]
 
 
     # !! Need To Implement Untagged Values
@@ -2018,8 +2020,8 @@ class ClassLoaderReferenceSet():
 
     class VisibleClassesEntry(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        refTypeTag = Optional[Byte] = None
-        typeID = Optional[ReferenceTypeID] = None
+        refTypeTag: Optional[Byte] = None
+        typeID: Optional[ReferenceTypeID] = None
 
         def from_bytes(self, data, offset=0) -> Tuple['VisibleClassesEntry', int]:
             self.refTypeTag, offset = Jdwp.parse_byte(data, offset, Byte)
@@ -2029,7 +2031,7 @@ class ClassLoaderReferenceSet():
     
     class VisibleClassesReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        classes: List[VisibleClassesEntry] = []
+        classes: List['VisibleClassesEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['ChildrenReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
@@ -2042,7 +2044,7 @@ class ClassLoaderReferenceSet():
     async def VisibleClasses(self, classLoaderObject: ClassLoaderID) -> VisibleClassesReply:
         await self.conn.send(14, 1, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return VisibleClassesReply().from_bytes(data)[0]
+        return self.VisibleClassesReply().from_bytes(data)[0]
 
 
 class EventRequestSet():
@@ -2241,8 +2243,8 @@ class EventRequestSet():
     
     async def Set(self, request: SetRequest) -> Int:
         await self.conn.send(15, 1, data=request.to_bytes())
-        data, _, _, _ = await self.conn.recv()
-        return Jdwp.parse_int(data, 0)[0]
+        #data, _, _, _ = await self.conn.recv()
+        #return Jdwp.parse_int(data, 0)[0]
 
 
     class ClearRequest(BaseModel):
@@ -2280,7 +2282,7 @@ class StackFrameSet():
         model_config = ConfigDict(validate_assignment=True)
         thread: Optional[ThreadID] = None
         frame: Optional[FrameID] = None
-        slots: List[GetValuesSlotEntry] = []
+        slots: List['GetValuesSlotEntry'] = []
 
         def to_bytes(self) -> bytes:
             out = [
@@ -2307,7 +2309,7 @@ class StackFrameSet():
     async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
         await self.conn.send(16, 1, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return GetValuesReply().from_bytes(data)[0]
+        return self.GetValuesReply().from_bytes(data)[0]
 
 
     class SetValuesSlotEntry(BaseModel):
@@ -2323,7 +2325,7 @@ class StackFrameSet():
         model_config = ConfigDict(validate_assignment=True)
         thread: Optional[ThreadID] = None
         frame: Optional[FrameID] = None
-        slots: List[SetValuesSlotEntry] = []
+        slots: List['SetValuesSlotEntry'] = []
 
         def to_bytes(self) -> bytes:
             out = [
@@ -2387,7 +2389,7 @@ class ClassObjectReferenceSet():
     async def ReflectedType(self, classObject: ClassObjectID) -> ReflectedTypeReply:
         await self.conn.send(17, 1, data=request.to_bytes())
         data, _, _, _ = await self.conn.recv()
-        return ReflectedTypeReply().from_bytes(data)[0]
+        return self.ReflectedTypeReply().from_bytes(data)[0]
 
 
 class EventSet():
