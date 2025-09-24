@@ -100,7 +100,7 @@ class EventKind():
     METHOD_ENTRY = 40
     METHOD_EXIT = 41
     METHOD_EXIT_WITH_RETURN_VALUE = 42
-    MONITOR_CONTENDER_ENTER = 43
+    MONITOR_CONTENDED_ENTER = 43
     MONITOR_CONTENDED_ENTERED = 44
     MONITOR_WAIT = 45
     MONITOR_WAITED = 46
@@ -167,6 +167,7 @@ class Jdwp():
         self.packet_id = 1
         self.pending_requests = {}
         self.event_loop = asyncio.get_running_loop()
+        self.event_queue = asyncio.Queue()
 
         self.VirtualMachine = VirtualMachineSet(self)
         self.ReferenceType = ReferenceTypeSet(self)
@@ -196,6 +197,7 @@ class Jdwp():
             raise RuntimeError("Failed to receive JDWP handshake.")
         
         asyncio.create_task(self.reader_loop())
+        asyncio.create_task(self.event_queue_consumer())
 
         return self
 
@@ -210,14 +212,21 @@ class Jdwp():
                     fut.set_result((data, pkt, flags, error_code))
             else:
                 # Incoming event
-                print("EVENT RECEIVED, OMITTING FOR NOW")
-                print(f"  Header: len {len(data)} pkt {pkt} flags {flags} err {error_code}")
-                print(f"  Data: {data.hex()}")
-                #if cmdset == EVENT_COMMAND_SET:
-                #    await event_queue.put(parse_event(payload))
-                #else:
-                #    # handle any other unsolicited command (rare)
-                #    pass
+                #print(f"EVENT RECEIVED: {data[0:64].hex()}")
+                offset = 0
+                cmdset, cmd = struct.unpack('>BB', data[offset:offset+2])
+                offset += 2
+                if cmdset != 64 or cmd != 100:
+                    raise RuntimeError(f"Unsupported event received. cmdset {cmdset} cmd {cmd}")
+                
+                composite = self.Event.CompositeCommand().from_bytes(data, offset)[0]
+                await self.event_queue.put(composite)
+
+    
+    async def event_queue_consumer(self):
+        while True:
+            composite = await self.event_queue.get()
+            print(f"EVENT: {composite}")
 
 
     async def send(self, cmdset, cmd, data=b'', expect_reply=False):
@@ -2380,8 +2389,313 @@ class EventSet():
     def __init__(self, conn):
         self.conn = conn
 
+    class EventVMStart(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.VM_START)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventVMStart', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            return self, offset
+
+
+    class EventSingleStep(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.SINGLE_STEP)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventSingleStep', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
+
+    class EventBreakpoint(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.BREAKPOINT)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventBreakpoint', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
+
+    class EventMethodEntry(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.METHOD_ENTRY)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMethodEntry', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
+
+    class EventMethodExit(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.METHOD_EXIT)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMethodExit', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
     
-    # !! Need to determine how this works.
-    # async def Composite(self) -> None:
-    #     await self.conn.send(64, 100)
+    
+    class EventMethodExitWithReturnValue(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.METHOD_EXIT_WITH_RETURN_VALUE)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+        value: Optional[Value] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMethodExitWithReturnValue', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.value, offset = Value().from_bytes(data, offset)
+            return self, offset
+    
+    class EventMonitorContendedEnter(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.MONITOR_CONTENDED_ENTER)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        objectID: Optional[TaggedObjectID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMonitorContendedEnter', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
+        
+    class EventMonitorContendedEntered(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.MONITOR_CONTENDED_ENTERED)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        objectID: Optional[TaggedObjectID] = None
+        location: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMonitorContendedEntered', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            self.location, offset = Location().from_bytes(data, offset)
+            return self, offset
+    
+    class EventMonitorWait(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.MONITOR_WAIT)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        objectID: Optional[TaggedObjectID] = None
+        location: Optional[Location] = None
+        timeout: Optional[Long] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMonitorWait', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.timeout, offset = Jdwp.parse_long(data, offset, Long)
+            return self, offset
+    
+    class EventMonitorWaited(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.MONITOR_WAITED)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        objectID: Optional[TaggedObjectID] = None
+        location: Optional[Location] = None
+        timed_out: Optional[Boolean] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventMonitorWaited', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.timed_out, offset = Jdwp.parse_byte(data, offset, Boolean)
+            return self, offset
+
+    class EventException(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.EXCEPTION)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+        exception: Optional[TaggedObjectID] = None
+        catchLocation: Optional[Location] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventException', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.exception, offset = TaggedObjectID().from_bytes(data, offset)
+            self.catchLocation, offset = Location().from_bytes(data, offset)
+            return self, offset
+
+    class EventThreadStart(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.THREAD_START)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventThreadStart', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            return self, offset
+
+    class EventThreadDeath(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.THREAD_DEATH)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventThreadDeath', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            return self, offset
+
+    class EventClassPrepare(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.CLASS_PREPARE)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        refTypeTag: Optional[Byte] = None
+        typeID: Optional[ReferenceTypeID] = None
+        signature: Optional[String] = None
+        status: Optional[Int] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventClassPrepare', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.refTypeTag, offset = Jdwp.parse_byte(data, offset, Byte)
+            self.typeID, offset = Jdwp.parse_long(data, offset, ReferenceTypeID)
+            self.signature, offet = Jdwp.parse_string(data, offset, String)
+            self.status, offset = Jdwp.parse_int(data, offset, Int)
+            return self, offset
+        
+    class EventClassUnload(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.CLASS_UNLOAD)
+        requestID: Optional[Int] = None
+        signature: Optional[String] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventClassUnload', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.signature, offet = Jdwp.parse_string(data, offset, String)
+            return self, offset
+
+    class EventFieldAccess(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.FIELD_ACCESS)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+        refTypeTag: Optional[Byte] = None
+        typeID: Optional[ReferenceTypeID] = None
+        fieldID: Optional[FieldID] = None
+        objectID: Optional[TaggedObjectID] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventFieldAccess', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.refTypeTag, offset = Jdwp.parse_byte(data, offset, Byte)
+            self.typeID, offset = Jdwp.parse_long(data, offset, ReferenceTypeID)
+            self.fieldID, offet = Jdwp.parse_long(data, offset, FieldID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            return self, offset
+    
+    class EventFieldModification(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.FIELD_MODIFICATION)
+        requestID: Optional[Int] = None
+        thread: Optional[ThreadID] = None
+        location: Optional[Location] = None
+        refTypeTag: Optional[Byte] = None
+        typeID: Optional[ReferenceTypeID] = None
+        fieldID: Optional[FieldID] = None
+        objectID: Optional[TaggedObjectID] = None
+        valueToBe: Optional[Value] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventFieldModification', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
+            self.location, offset = Location().from_bytes(data, offset)
+            self.refTypeTag, offset = Jdwp.parse_byte(data, offset, Byte)
+            self.typeID, offset = Jdwp.parse_long(data, offset, ReferenceTypeID)
+            self.fieldID, offet = Jdwp.parse_long(data, offset, FieldID)
+            self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
+            self.valueToBe, offset = Value().from_bytes(data, offset)
+            return self, offset
+
+
+    class EventVMDeath(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        eventKind: Optional[Byte] = Byte(EventKind.VM_DEATH)
+        requestID: Optional[Int] = None
+
+        def from_bytes(self, data, offset=0) -> Tuple['EventVMDeath', int]:
+            self.requestID, offset = Jdwp.parse_int(data, offset, Int)
+            return self, offset
+
+    Events = {
+        EventKind.VM_START: EventVMStart,
+        EventKind.SINGLE_STEP: EventSingleStep,
+        EventKind.BREAKPOINT: EventBreakpoint,
+        #EventKind.FRAME_POP: 3 # undefined,
+        EventKind.EXCEPTION: EventException,
+        #EventKind.USER_DEFINED: 5 # undefined,
+        EventKind.THREAD_START: EventThreadStart,
+        EventKind.THREAD_DEATH: EventThreadDeath,
+        EventKind.CLASS_PREPARE: EventClassPrepare,
+        EventKind.CLASS_UNLOAD: EventClassUnload,
+        #EventKind.CLASS_LOAD: 10 # undefined,
+        EventKind.FIELD_ACCESS: EventFieldAccess,
+        EventKind.FIELD_MODIFICATION: EventFieldModification,
+        #EventKind.EXCEPTION_CATCH: 30 # undefined,
+        EventKind.METHOD_ENTRY: EventMethodEntry,
+        EventKind.METHOD_EXIT: EventMethodExit,
+        EventKind.METHOD_EXIT_WITH_RETURN_VALUE: EventMethodExitWithReturnValue,
+        EventKind.MONITOR_CONTENDED_ENTER: EventMonitorContendedEnter,
+        EventKind.MONITOR_CONTENDED_ENTERED: EventMonitorContendedEntered,
+        EventKind.MONITOR_WAIT: EventMonitorWait,
+        EventKind.MONITOR_WAITED: EventMonitorWaited,
+        EventKind.VM_DEATH: EventVMDeath,
+    }
+
+    class CompositeCommand(BaseModel):
+        model_config = ConfigDict(validate_assignment=True)
+        suspendPolicy: Optional[Byte] = None
+        # !! TODO: Would like to eventually use a type here.
+        events: List = []
+
+        def from_bytes(self, data, offset=0) -> Tuple['CompositeCommand', int]:
+            self.suspendPolicy, offset = Jdwp.parse_byte(data, offset, Byte)
+            count, offset = Jdwp.parse_int(data, offset)
+            for _ in range(count):
+                eventKind, offset = Jdwp.parse_byte(data, offset, Byte)
+                #print(f"EventKind: {eventKind}")
+                evt, offset = EventSet.Events[eventKind]().from_bytes(data, offset)
+                self.events.append(evt)
+            return self, offset
+
+
         
