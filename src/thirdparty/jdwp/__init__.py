@@ -226,7 +226,7 @@ class Jdwp():
         pkt = self.packet_id
         self.packet_id += 1
         packet = struct.pack('>IIBBB', length, pkt, flags, cmdset, cmd) + data
-        print(f"Sent Packet: len {length} pkt {pkt} cmdset {cmdset} cmd {cmd}")
+        #print(f"Sent Packet: len {length} pkt {pkt} cmdset {cmdset} cmd {cmd}")
         if expect_reply:
             self.pending_requests[pkt] = self.event_loop.create_future()
         self.writer.write(packet)
@@ -239,15 +239,23 @@ class Jdwp():
         return await self.send(cmdset, cmd, data, True)
 
 
-    async def recv(self):
-        header = await self.reader.readexactly(11)
-        length, pkt, flags, error_code = struct.unpack('>IIBH', header)
-        data_length = length - 11
+    async def recv(self, ignore_error=False):
+        header = await self.reader.readexactly(9)
+        length, pkt, flags = struct.unpack('>IIB', header)
+        data_length = length - 9
+        
+        error_code = 0
+        if flags == Jdwp.REPLY_PACKET:
+            err_data = await self.reader.readexactly(2)
+            error_code = struct.unpack('>H', err_data)[0]
+            if not ignore_error and error_code != 0:
+                raise RuntimeError(f"JDWP error code {error_code}")
+            data_length -= 2
+        
         data = await self.reader.readexactly(data_length)
+        
         #print(f"Recv'd Header: len {length} pkt {pkt} flags {flags} error {error_code}")
         #print(f"Recv'd Data: {data.hex()}")
-        if error_code != 0:
-            raise RuntimeError(f"JDWP error code {error_code}")
         return data, pkt, flags, error_code
     
 
