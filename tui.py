@@ -31,7 +31,7 @@ import asyncio
 
 from textual import events
 from textual.app import App, ComposeResult
-from textual.events import Key
+from textual.events import Key, Click
 from textual.widgets import Button, Header, Label, Static, Footer, Input, TextArea
 from textual.containers import Horizontal, VerticalScroll, Vertical
 from textual.binding import Binding
@@ -47,6 +47,11 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from textual import work
 
+import shlex
+import argparse
+
+from thirdparty.jdwp.tui.adb import AdbCommand
+
 class CmdInput(TextArea):
 
     def get_prompt(self):
@@ -60,14 +65,32 @@ class CmdInput(TextArea):
         else:
             self.prompt = kwargs['prompt']
 
+        self.adb_command = AdbCommand(self)
+
 
     def on_mount(self) -> None:
         self.insert(self.get_prompt())
 
 
+    def cmd_log(self, out):
+
+        self.app.query_one("#cmd_scroll").mount(Static(out), before=self)
+        self.app.query_one("#cmd_scroll").scroll_end(animate=False)
+
+
     def process_cmd(self, cmd):
         vscroll = self.app.query_one("#cmd_scroll")
-        pass
+
+        args = shlex.split(cmd)
+        if len(args) < 1:
+            return
+
+        if args[0] == 'help':
+            vscroll.mount(Static("Help should go here."), before=self)
+
+        if args[0] == 'adb':
+            vscroll.mount(Static(self.adb_command.handle(args)), before=self)
+
     
 
     def on_key(self, event: Key) -> None:
@@ -87,6 +110,16 @@ class CmdInput(TextArea):
             self.insert(self.get_prompt())
 
             self.process_cmd(cmd)
+
+
+class CodeLine(Static):
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        event.prevent_default()
+
+        watch = self.app.query_one("#watch_scroll")
+        watch.mount(Static(f"{self.meta}"))
 
 
 class MyApp(App):
@@ -127,6 +160,12 @@ class MyApp(App):
         Binding("escape", "focus_cmd_input", "Command Input"),
     ]
 
+    def watch_log(self, out):
+
+        self.query_one("#watch_scroll").mount(Static(out))
+        self.query_one("#watch_scroll").scroll_end(animate=False)
+
+
     def compose(self) -> ComposeResult:
 
         yield Header()
@@ -164,7 +203,9 @@ class MyApp(App):
                     'content': line,
                     'index': idx,
                 }
-                self.code_lines.append(Static(line))
+                code_line = CodeLine(line)
+                code_line.meta = self.code_content[idx]
+                self.code_lines.append(code_line)
         
     
     def action_focus_cmd_input(self) -> None:
