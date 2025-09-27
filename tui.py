@@ -1,115 +1,62 @@
 #!/usr/bin/env python3
 
-'''
-This has become a bit of a bullshit nightmare. Textual has much better visuals and
-mouse support. Prompt_toolkit has much better REPL support. Essentially, they are
-both really shitty at what they don't do and I need both of those things.
 
-Textualize, atm, seems like the way to go and I'll need to re-implement the aspects
-of prompt_toolkit that don't exist. This includes a "ok" REPL interface. As a minimal
-viable thing, this seems very doable as long as i catch all the weird edge cases with
-Text Areas.
-
-The more complex aspect of this is the "code browser". Here, I want to display thousands
-of entries in a list. I had hoped that Textualize or Prompt_Toolkit could handle the
-optimizations of this, but it doesn't appear to do so. The implementation vision is:
-
-- Have an authoratative database (i.e. dict) that stores everything. The code editor itself
-will need to dynamically generate Static lines for each of the database entries as they
-become close to being viewed. (For now we'll play it naive and have Static for everything
-always.)
-- Each Static should be able to handle click/tap events that provide more information
-  or allow setting breakpoints, etc.
-- Each Static will have its own style so that it'll have a different color scheme when
-  its a breakpoint or active instruction pointer (or other important status.)
-- We also want to be able to inject comment Static that are not part of the original code.l
-'''
-
-
-
-import asyncio
-
-from textual import events
 from textual.app import App, ComposeResult
 from textual.events import Key, Click
 from textual.widgets import Button, Header, Label, Static, Footer, Input, TextArea
+from textual.widgets import Header, Static, Footer, TextArea
 from textual.containers import Horizontal, VerticalScroll, Vertical
 from textual.binding import Binding
-from textual.message import Message
 from rich.text import Text
-from rich.console import Console
-from rich.syntax import Syntax
-import datetime
-import json
-import math
-from textual.events import Key
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.document import Document
-from textual import work
-
 import shlex
-import argparse
 
+from thirdparty.jdwp.tui.cmdinput import CmdInput
 from thirdparty.jdwp.tui.adb import AdbCommand
 
-class CmdInput(TextArea):
 
-    def get_prompt(self):
-        return self.prompt
+class MyCmdInput(CmdInput):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if 'prompt' not in kwargs:
-            self.prompt = '> '
-        else:
-            self.prompt = kwargs['prompt']
-
+        # Register adb as a command
         self.adb_command = AdbCommand(self)
 
 
-    def on_mount(self) -> None:
-        self.insert(self.get_prompt())
+    def get_prompt(self):
+        '''Implemented as a method for dynamic behaviors.'''
+        return '> '
 
 
     def cmd_log(self, out):
-
-        self.app.query_one("#cmd_scroll").mount(Static(out), before=self)
-        self.app.query_one("#cmd_scroll").scroll_end(animate=False)
+        self.cmd_scroll.mount(Static(out), before=self)
+        self.cmd_scroll.scroll_end(animate=False)
 
 
     def process_cmd(self, cmd):
-        vscroll = self.app.query_one("#cmd_scroll")
+        self.cmd_log(f"{self.last_prompt}{cmd}")
 
+        # Split command for argparse processing.
         args = shlex.split(cmd)
         if len(args) < 1:
             return
 
-        if args[0] == 'help':
-            vscroll.mount(Static("Help should go here."), before=self)
+        if args[0] == 'clear':
+            self.cmd_scroll.remove_children(Static)
+            self.cmd_scroll.mount(self)
+            return
 
+        # Deal with application specific command.
         if args[0] == 'adb':
-            vscroll.mount(Static(self.adb_command.handle(args)), before=self)
+            self.cmd_scroll.mount(Static(self.adb_command.handle(args)), before=self)
+            return
+        
+        self.cmd_scroll.mount(Static("Command not recognized."), before=self)
 
-    
 
-    def on_key(self, event: Key) -> None:
-        if event.key == "enter":
-            vscroll = self.app.query_one("#cmd_scroll")
-            
-            # TODO: We need the length of the previous prompt?!
-            prompt_length = len(self.get_prompt())
-
-            cmd_input = self.app.query_one("#cmd_input")
-            cmd = cmd_input.text[prompt_length:]
-            vscroll.mount(Static(f"{cmd_input.text}"), before=self)
-            vscroll.scroll_end(animate=False)
-            event.stop()
-            event.prevent_default()
-            self.clear()
-            self.insert(self.get_prompt())
-
-            self.process_cmd(cmd)
+    def on_mount(self) -> None:
+        # Fetch the reference to this once.
+        self.cmd_scroll = self.app.query_one("#cmd_scroll")
 
 
 class CodeLine(Static):
@@ -124,7 +71,7 @@ class CodeLine(Static):
 
 class MyApp(App):
     
-    TITLE = "Mine"
+    TITLE = "Debugger"
 
 
     CSS = """
@@ -144,26 +91,34 @@ class MyApp(App):
             color: white;
         }
 
-        #code_frame, #watch_frame, #cmd_frame {
+        #watch_frame, #code_frame {
             height: 1fr;
             border: solid blue;
         }
 
+        #cmd_frame {
+          background: black;
+          height: 1fr;
+          border: solid blue;
+        }
+
         #cmd_input {
+          background: black;
           border: none;
           padding: 0;
           margin: 0;
+          height: 4;
         }
     """
+
 
     BINDINGS = [
         Binding("escape", "focus_cmd_input", "Command Input"),
     ]
 
-    def watch_log(self, out):
 
-        self.query_one("#watch_scroll").mount(Static(out))
-        self.query_one("#watch_scroll").scroll_end(animate=False)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
     def compose(self) -> ComposeResult:
@@ -182,16 +137,23 @@ class MyApp(App):
             with Vertical(id="cmd_frame"):
                 yield Static("Command View", id="cmd_title")
                 with VerticalScroll(id="cmd_scroll"):
-                    yield CmdInput(id="cmd_input")
+                    yield MyCmdInput(id="cmd_input", soft_wrap=True)
         yield Footer()
-    
+
 
     def on_mount(self) -> None:
 
+        # Grab references to all of these once.
+        self.code_scroll = self.query_one("#code_scroll")
+        self.watch_scroll = self.query_one("#watch_scroll")
+        self.cmd_scroll = self.query_one("#cmd_scroll")
+        self.cmd_input = self.query_one("#cmd_input")
+
+        # Application specific, but this is where we "list objects."
         self.load_file('/etc/passwd')
-        self.query_one("#code_scroll").mount_all(self.code_lines)
-        self.query_one("#cmd_input").focus()
-        
+        self.code_scroll.mount_all(self.code_lines)
+        self.cmd_input.focus()
+
     
     def load_file(self, fpath):
         self.code_content = {}
@@ -209,7 +171,13 @@ class MyApp(App):
         
     
     def action_focus_cmd_input(self) -> None:
-        self.query_one("#cmd_input").focus
+        self.cmd_input.focus()
+
+
+    def watch_log(self, out):
+        self.watch_scroll.mount(Static(out))
+        self.watch_scroll.scroll_end(animate=False)
+
 
 
 if __name__ == "__main__":

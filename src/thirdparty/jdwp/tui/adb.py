@@ -11,6 +11,7 @@ class AdbCommand():
         self.cmd_input = cmd_input
         self.app = cmd_input.app
         self.argparser = argparse.ArgumentParser(prog='adb')
+        self.argparser.set_defaults(func=lambda *args, **kwargs: 'Nothing to do.')
         subparsers = self.argparser.add_subparsers(help='subcommand help')
         adb_debug = subparsers.add_parser('debug')
         adb_debug.add_argument('package_name')
