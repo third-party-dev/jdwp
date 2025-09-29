@@ -168,6 +168,7 @@ class Jdwp():
         self.pending_requests = {}
         self.event_loop = asyncio.get_running_loop()
         self.event_queue = asyncio.Queue()
+        self.event_handler = {}
 
         self.VirtualMachine = VirtualMachineSet(self)
         self.ReferenceType = ReferenceTypeSet(self)
@@ -222,11 +223,21 @@ class Jdwp():
                 composite = self.Event.CompositeCommand().from_bytes(data, offset)[0]
                 await self.event_queue.put(composite)
 
+
+    # TODO: Make this a subscription based thing?
+    def register_event_handler(self, requestID: Int, sync_handler):
+        self.event_handler[requestID] = sync_handler
+
     
     async def event_queue_consumer(self):
         while True:
             composite = await self.event_queue.get()
             print(f"EVENT: {composite}")
+            for event in composite.events:
+                if event.requestID in self.event_handler:
+                    # TODO: How do we handle the async nature of this?
+                    # Note: Going to assume sync for now. Callee can convert to async if needed.
+                    self.event_handler[event.requestID](event, composite, self)
 
 
     async def send(self, cmdset, cmd, data=b'', expect_reply=False):

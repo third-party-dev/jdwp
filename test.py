@@ -10,28 +10,44 @@ pip install pyaxml
 
 '''
 
-from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
 import asyncio
-import pdb
+from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
+import thirdparty.sandbox as __sandbox__
 
-db = {
-    'class_by_generic': {},
-    'class_by_signature': {},
-    'class_by_typeid': {},
-    'classpaths': {},
-    'bootclasspaths': {},
-    'threads': {},
-}
+# Utility imports
+import multiprocessing
+import pdb
+from fuzzyfinder import fuzzyfinder
+from pprint import pprint
+
+db = {}
+# TODO: This is not working.
+#db = multiprocessing.Manager().dict()
+db['class_by_generic'] = {}
+db['class_by_signature'] = {}
+db['class_by_typeid'] = {}
+db['classpaths'] = {}
+db['bootclasspaths'] = {}
+db['threads'] = {}
+db2 = db
+
+jdwp = None
+
+def handle_class_prepare(event, composite, wp):
+    print(f"In event handler: {event}")
 
 async def main():
     global db
+    global jdwp
 
+    print("Connecting to JDWP endpoint: localhost:8700")
     jdwp = await Jdwp('localhost', 8700).start()
 
     await jdwp.VirtualMachine.Suspend()
     
     print("VirtualMachine.IDSizes()")
     idsizes = await jdwp.VirtualMachine.IDSizes()
+    db['idsizes'] = idsizes
     print(f"  fieldIDSize = {idsizes.fieldIDSize}")
     print(f"  methodIDSize = {idsizes.methodIDSize}")
     print(f"  objectIDSize = {idsizes.objectIDSize}")
@@ -47,6 +63,8 @@ async def main():
     # No modifiers.
     class_prepare_reqid = await jdwp.EventRequest.Set(evt_req)
     print(f" RequestID = {class_prepare_reqid}")
+
+    jdwp.register_event_handler(class_prepare_reqid, handle_class_prepare)
 
 
     # Watch for removed classes.
@@ -77,6 +95,7 @@ async def main():
 
     print("VirtualMachine.Version()")
     versions = await jdwp.VirtualMachine.Version()
+    db['versions'] = versions
     print(f"  description = {versions.description}")
     print(f"  jdwpMajor = {versions.jdwpMajor}")
     print(f"  jdwpMinor = {versions.jdwpMinor}")
@@ -87,6 +106,7 @@ async def main():
     # Get all the current classes.
     print("VirtualMachine.AllClassesWithGeneric()")
     all_classes_reply = await jdwp.VirtualMachine.AllClassesWithGeneric()
+    db['all_classes_reply1'] = all_classes_reply
     i = 0
     for clazz in all_classes_reply.classes:
         db['class_by_typeid'][clazz.typeID] = clazz
@@ -126,7 +146,8 @@ async def main():
     print("EventRequest.Set(THREAD_START)")
     evt_req = jdwp.EventRequest.SetRequest()
     evt_req.eventKind = Byte(Jdwp.EventKind.THREAD_START)
-    evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
+    #evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
+    evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
     # No modifiers
     thread_start_reqid = await jdwp.EventRequest.Set(evt_req)
     print(f"  RequestID = {thread_start_reqid}")
@@ -163,8 +184,8 @@ async def main():
       db['threads'][t] = True
     print(f"  Threads: {len(db['threads'])}")
 
-    print("VirtualMachine.Resume()")
-    await jdwp.VirtualMachine.Resume()
+    # print("VirtualMachine.Resume()")
+    # await jdwp.VirtualMachine.Resume()
 
     try:
       print("Waiting for events... Ctrl-C to quit.")
@@ -172,94 +193,28 @@ async def main():
           await asyncio.sleep(1)
     except KeyboardInterrupt:
       exit(0)
-        
 
-asyncio.run(main())
+
+async def main_with_sandbox():
+    global db
+    # Note: Need to send the globals() from this scope or we get the module's globals().
+    sandbox_coro = __sandbox__.start_sandbox(
+        repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
+        exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
+        dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
+    )
+    sandbox_task = asyncio.create_task(sandbox_coro)
+    main_task = asyncio.create_task(main())
+    await asyncio.gather(sandbox_task, main_task)
+
+
+if __name__ == "__main__":
+    asyncio.run(main_with_sandbox())
+
 
 
 '''
-stop in sh.kau.playground.quoter.QuotesRepoImpl.quoteForTheDay
-pkt 1 - 8
-
-pkt 9 - 116 - actions
-
-req
-00000042 00001232 00 0f 01 08 02 00000002 
-  - 05 00000027 73682e6b61752e706c617967726f756e642e71756f7465722e51756f7465735265706f496d706c
-  - 01 00000001
-EventRequest.Set(CLASS_PREPARE)
-
-resp
-0000000f 00001232 80 0000 0000000b - requestID
-
-req
-0000002b 00001234 00 0f 01 02 02 00000001 07 loc: 01 cls 00000000000055e1 meth 000072cbc9315488 off 0000000000000000
-EventRequest.Set(BREAKPOINT)
-
-req
-00000010 00001236 00 0f 02 08 0000000b
-EventRequest.Clear
-
-req
-00000013 000012d8 00 0b 07 00000000000065ec
-ThreadReference.FrameCount
-
-req
-0000001b 000012da 00 0b 06 00000000000065ec0000000000000001
-ThreadReference.Frames
-
-req
-00000013 000012dc 00 0b 01 00000000000065ec
-ThreadReference.Name
-
-req
-0000000b 000012de 00 01 11
-VirtualMachine.CapabilitiesNew
-
-req
-00000013 000012e0 00 02 0c 00000000000055e1
-ReferenceType.SourceDebugExtension
-
-
-
-
-
-
-resp 000012e0
-tcp 000000000000000000000000080045000210fd11400040063dd47f0000017f00000121fcc2a480707ba298ac8e3780180200000500000101080a8b41fda58b41fda3 
-data 000001dc000012e0800000000001cd534d41500a51756f7465735265706f496d706c2e6b740a4b6f746c696e0a2a53204b6f746c696e0a2a460a2b20312051756f7465735265706f496d706c2e6b740a73682f6b61752f706c617967726f756e642f71756f7465722f51756f7465735265706f496d706c0a2b2032206275696c646572732e6b740a696f2f6b746f722f636c69656e742f726571756573742f4275696c646572734b740a2b20332048747470436c69656e7443616c6c2e6b740a696f2f6b746f722f636c69656e742f63616c6c2f48747470436c69656e7443616c6c4b740a2b203420547970652e6b740a696f2f6b746f722f7574696c2f7265666c6563742f547970654b740a2a4c0a3123312c33333a310a33323923323a33340a32323223323a33350a393623322c323a33360a313923323a33380a31343223333a33390a353823342c31363a34300a2a53204b6f746c696e44656275670a2a460a2b20312051756f7465735265706f496d706c2e6b740a73682f6b61752f706c617967726f756e642f71756f7465722f51756f7465735265706f496d706c0a2a4c0a323723313a33340a323723313a33350a323723313a33362c320a323723313a33380a333023313a33390a333023313a34302c31360a2a450a
-
-event
-tcp 0000000000000000000000000800450002c4fd0c400040063d257f0000017f00000121fcc2a48070787f98ac8dd88018020000b900000101080a8b41fd8c8b41fd87 
-data:
-
-00000054 0000128d 00 40 64 00 00000001 08 
-
-- 00000002 00000000000065ec 01 00000000000066db 00000026 4c696f2f6b746f722f687474702f436f6e74656e7454797065244170706c69636174696f6e3b 00000003
-
-00000056 0000128e 00 40 64 00 00000001 08
-
-- 00000002 00000000000065ec 01 00000000000066dc 00000028 4c696f2f6b746f722f687474702f48656164657256616c756557697468506172616d65746572733b 00000003
-
-00000048 0000128f 00 40 64 00 00000001 08 
-
-- 00000002 00000000000065ec 01 00000000000066dd 0000001a 4c696f2f6b746f722f687474702f436f6e74656e74547970653b 00000003
-
-00000054 00001290 00 40 64 00 00000001 08
-
-- 00000002 00000000000065ec 01 00000000000066de 00000026 4c696f2f6b746f722f687474702f487474704d65737361676550726f706572746965734b743b 00000003
-
-00000047 00001291 00 40 64 00 00000001 08
-
-- 00000002 00000000000065ec 01 00000000000066df 00000019 4c696f2f6b746f722f687474702f487474704d6574686f643b0000000300000051000012920040640000000001080000000200000000000065ec0100000000000066e0000000234c696f2f6b746f722f687474702f487474704d6574686f6424436f6d70616e696f6e3b0000000300000056000012930040640000000001080000000200000000000065ec0100000000000066e1000000284c696f2f6b746f722f636c69656e742f73746174656d656e742f4874747053746174656d656e743b000000030000005c000012940040640200000002020000000c00000000000065ec0100000000000055e1000072cbc93154880000000000000000020000000a00000000000065ec0100000000000055e1000072cbc93154880000000000000000
-
-
-
-
-
-
-
-
-
-
+async def dothing():
+  await jdwp.VirtualMachine.Resume()
+asyncio.get_event_loop().create_task(dothing())
 '''
