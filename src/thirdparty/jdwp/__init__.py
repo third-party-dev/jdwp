@@ -232,19 +232,20 @@ class Jdwp():
 
 
     # TODO: Make this a subscription based thing?
-    def register_event_handler(self, requestID: Int, sync_handler):
-        self.event_handler[requestID] = sync_handler
+    def register_event_handler(self, requestID: Int, sync_handler, args=None):
+        self.event_handler[requestID] = (sync_handler, args)
 
     
     async def event_queue_consumer(self):
         while True:
             composite = await self.event_queue.get()
-            print(f"EVENT: {composite}")
+            #print(f"EVENT: {composite}")
             for event in composite.events:
                 if event.requestID in self.event_handler:
                     # TODO: How do we handle the async nature of this?
                     # Note: Going to assume sync for now. Callee can convert to async if needed.
-                    self.event_handler[event.requestID](event, composite, self)
+                    (handler, args) = self.event_handler[event.requestID]
+                    handler(event, composite, args)
 
 
     async def send(self, cmdset, cmd, data=b'', expect_reply=False):
@@ -939,7 +940,7 @@ class ReferenceTypeSet():
         def from_bytes(self, data, offset=0) -> Tuple['MethodsReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                entry, offset = MethodsDeclaredEntry().from_bytes(data, offset)
+                entry, offset = ReferenceTypeSet.MethodsDeclaredEntry().from_bytes(data, offset)
                 self.declared = [*self.declared, entry]
             return self, offset
 
@@ -2711,6 +2712,11 @@ class EventSet():
             for _ in range(count):
                 eventKind, offset = Jdwp.parse_byte(data, offset, Byte)
                 #print(f"EventKind: {eventKind}")
+                if eventKind not in EventSet.Events:
+                    #print(f"UNKNOWN EVENT: Got {eventKind} as eventKind.")
+                    #print(f"{data[offset:]}")
+                    # TODO: Maybe throw here? Letting it pass for now.
+                    break
                 evt, offset = EventSet.Events[eventKind]().from_bytes(data, offset)
                 self.events.append(evt)
             return self, offset

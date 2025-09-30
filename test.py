@@ -42,7 +42,24 @@ async def main():
   print("Connecting debugger to localhost:8700")
   await dbg.start('127.0.0.1', 8700)
   dbg.print_summary()
+  
+
+  # TODO: Do deferred breakpoints.
+  # Wait for Class Prepare for target class via callback.
+  # Get composite event in callback
+  # - clear event request id
+  # - fetch method references for loaded class
+  # - Set event breakpoint with callback for loaded class
+  #   - Need classID, methodID and bytecode index (Default=0)
+  # 
+
+  print("Setting up deferred breakpoint.")
+  class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
+  method_signature = ''
+  await dbg.enable_deferred_breakpoint(class_signature, method_signature)
+
   await dbg.resume_vm()
+
 
   try:
     print("Waiting for events... Ctrl-C to quit.")
