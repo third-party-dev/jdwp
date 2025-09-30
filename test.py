@@ -55,7 +55,7 @@ async def main():
 
   print("Setting up deferred breakpoint.")
   class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
-  method_signature = ''
+  method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
   await dbg.enable_deferred_breakpoint(class_signature, method_signature)
 
   await dbg.resume_vm()

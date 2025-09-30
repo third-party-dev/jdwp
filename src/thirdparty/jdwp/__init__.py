@@ -245,7 +245,7 @@ class Jdwp():
                     # TODO: How do we handle the async nature of this?
                     # Note: Going to assume sync for now. Callee can convert to async if needed.
                     (handler, args) = self.event_handler[event.requestID]
-                    handler(event, composite, args)
+                    await handler(event, composite, args)
 
 
     async def send(self, cmdset, cmd, data=b'', expect_reply=False):
@@ -408,6 +408,15 @@ class Location(BaseModel):
         self.methodID, offset = Jdwp.parse_long(data, offset, MethodID)
         self.index, offset = Jdwp.parse_long(data, offset, Long)
         return self, offset
+    
+    def to_bytes(self) -> bytes:
+        out = [
+            Jdwp.make_byte(self.tag),
+            Jdwp.make_long(self.classID),
+            Jdwp.make_long(self.methodID),
+            Jdwp.make_long(self.index),
+        ]
+        return b''.join(out)
 
 
 class ArrayRegion(BaseModel):
@@ -2144,7 +2153,7 @@ class EventRequestSet():
         def to_bytes(self) -> bytes:
             return b''.join([
                 Jdwp.make_byte(self.modKind),
-                loc.to_bytes(),
+                self.loc.to_bytes(),
             ])
 
     class SetExceptionOnlyModifier: #8
@@ -2267,7 +2276,7 @@ class EventRequestSet():
         requestID: Optional[Int] = None
 
         def to_bytes(self) -> bytes:
-            return b''.join([Jdwp.make_long(self.eventKind), Jdwp.make_int(self.requestID)])
+            return b''.join([Jdwp.make_byte(self.eventKind), Jdwp.make_int(self.requestID)])
     
     async def Clear(self, request: ClearRequest) -> None:
         await self.conn.send(15, 2, data=request.to_bytes())

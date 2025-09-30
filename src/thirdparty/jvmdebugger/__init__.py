@@ -1,5 +1,5 @@
 import asyncio
-from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
+from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, Long, ClassID
 
 from thirdparty.jvmdebugger.state import *
 
@@ -66,13 +66,14 @@ class JvmDebugger():
 
     async def disable_class_prepare_event(self, request_id):
         evt_req = self.jdwp.EventRequest.ClearRequest()
-        evt_req.eventKind = Byte(EventKind.CLASS_PREPARE)
+        evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
         evt_req.requestID = request_id
         await self.jdwp.EventRequest.Clear(evt_req)
+        print(f"Cleared {request_id} CLASS_PREPARE event.")
 
 
     @staticmethod
-    def handle_class_prepare(event, composite, dbg):
+    async def handle_class_prepare(event, composite, dbg):
         if event.typeID not in dbg.classes_by_id:
             classInfo = ClassInfo()
             classInfo.refTypeTag = event.refTypeTag
@@ -103,30 +104,65 @@ class JvmDebugger():
         
             # TODO: Verify it doesn't already exist?
             classInfo.methods_by_id[methodInfo.methodID] = methodInfo
-            # Note: method name may be ambiguous.
-            classInfo.methods_by_signature[methodInfo.signature] = methodInfo
+            # Note: method name or signature may be ambiguous.
+            method_signature = (methodInfo.name, methodInfo.signature)
+            print(f"Inserting method_signature {method_signature}")
+            classInfo.methods_by_signature[method_signature] = methodInfo
 
 
     @staticmethod
-    def handle_deferred_breakpoint_class_prepare(event, composite, args):
+    async def handle_breakpoint_event(event, composite, args):
+        print("INSIDE BREAKPOINT")
+        dbg, = args
+
+
+
+
+
+
+    @staticmethod
+    async def handle_deferred_breakpoint_class_prepare(event, composite, args):
         # Fetch arguments
         dbg, class_signature, method_signature, bytecode_index = args
 
-        # Make sure the class is registered.
-        JvmDebugger.handle_class_prepare(event, composite, dbg)
+        # Make sure the class is registered (in case this beats the general CLASS_PREPARE).
+        await JvmDebugger.handle_class_prepare(event, composite, dbg)
 
         # Stop class prepare events.
-        asyncio.get_running_loop().create_task(dbg.disable_class_prepare_event(event.requestID))
+        #print(f"Disable class prepare reqid {event.requestID}")
+        await dbg.disable_class_prepare_event(event.requestID)
 
-        print(f"update_class_methods({class_signature})")
-        # Load methods for class.
-        asyncio.get_running_loop().create_task(dbg.update_class_methods(event.typeID))
+        # Get the methods for the target class.
+        await dbg.update_class_methods(event.typeID)
 
+        if class_signature in dbg.classes_by_signature:
+            classInfo = dbg.classes_by_signature[class_signature]
+            if method_signature in classInfo.methods_by_signature:
+                methodInfo = classInfo.methods_by_signature[method_signature]
+                print(f"BREAKPOINT: {classInfo.signature} [{classInfo.typeID}] {methodInfo.name}{methodInfo.signature} [{methodInfo.methodID}] bytecode index {bytecode_index}")
+                # TODO: Event set breakpoint with class, method, and offset
 
+                evt_req = dbg.jdwp.EventRequest.SetRequest()
+                evt_req.eventKind = Byte(Jdwp.EventKind.BREAKPOINT)
+                evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
 
-        # TODO: Event set breakpoint with class, method, and offset
-        #classInfo = dbg.classes_by_signature[class_signature]
-        #methodInfo = classInfo.methods_by_signature[method_signature]
+                loc = Location()
+                loc.tag = Byte(Jdwp.TypeTag.CLASS)
+                loc.classID = ClassID(classInfo.typeID)
+                loc.methodID = methodInfo.methodID
+                loc.index = Long(0)
+
+                mod = dbg.jdwp.EventRequest.SetLocationOnlyModifier()
+                mod.loc = loc
+                evt_req.modifiers.append(mod)
+                mod = dbg.jdwp.EventRequest.SetCountModifier()
+                mod.count = Int(1)
+                evt_req.modifiers.append(mod)
+
+                reqid = await dbg.jdwp.EventRequest.Set(evt_req)
+                dbg.jdwp.register_event_handler(reqid, JvmDebugger.handle_breakpoint_event, (dbg,))
+
+                
 
     
     async def enable_deferred_breakpoint(self, class_signature, method_signature, bytecode_index=0):
@@ -135,6 +171,7 @@ class JvmDebugger():
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
 
         mod = self.jdwp.EventRequest.SetClassMatchModifier()
+        #mod.classPattern = String(class_signature)
         mod.classPattern = String("sh.kau.playground.quoter.QuotesRepoImpl")
         evt_req.modifiers.append(mod)
         mod = self.jdwp.EventRequest.SetCountModifier()
@@ -144,8 +181,8 @@ class JvmDebugger():
         # TODO: add a class matcher or something here?
         reqid = await self.jdwp.EventRequest.Set(evt_req)
 
-        print("Registered handle_deferred_breakpoint_class_prepare callback.")
-        self.jdwp.register_event_handler(self.class_prepare_reqid, JvmDebugger.handle_deferred_breakpoint_class_prepare, (self, class_signature, method_signature, bytecode_index))
+        print(f"Registered handle_deferred_breakpoint_class_prepare callback (reqid {reqid}).")
+        self.jdwp.register_event_handler(reqid, JvmDebugger.handle_deferred_breakpoint_class_prepare, (self, class_signature, method_signature, bytecode_index))
 
 
     async def enable_class_prepare_events(self):
@@ -156,7 +193,7 @@ class JvmDebugger():
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
         self.class_prepare_reqid = await self.jdwp.EventRequest.Set(evt_req)
-        #print(f" RequestID = {class_prepare_reqid}")
+        print(f"enable_class_prepare_events RequestID = {self.class_prepare_reqid}")
 
         self.jdwp.register_event_handler(self.class_prepare_reqid, JvmDebugger.handle_class_prepare, self)
 
@@ -187,9 +224,9 @@ class JvmDebugger():
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
         self.class_unload_reqid = await self.jdwp.EventRequest.Set(evt_req)
-        #print(f" RequestID = {class_unload_reqid}")
+        print(f"enable_class_unload_events RequestID = {self.class_unload_reqid}")
 
-        def handle_class_unload(event, composite, wp):
+        async def handle_class_unload(event, composite, wp):
             # TODO: Do we check if it already existed?
             
             if event.signature in self.classes_by_signature:
@@ -211,15 +248,15 @@ class JvmDebugger():
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
         self.thread_start_reqid = await self.jdwp.EventRequest.Set(evt_req)
-        #print(f" RequestID = {class_unload_reqid}")
+        print(f"enable_thread_start_events RequestID = {self.thread_start_reqid}")
 
-        def handle_thread_start(event, composite, wp):
+        async def handle_thread_start(event, composite, wp):
             # TODO: Do we check if it already existed?
             threadInfo = ThreadInfo()
             threadInfo.threadID = event.thread
             # TODO: Do we see if it already exists first?
             self.threads_by_id[threadInfo.threadID] = threadInfo
-            print(f"THREAD_START: {threadInfo.threadID}")
+            #print(f"THREAD_START: {threadInfo.threadID}")
 
         self.jdwp.register_event_handler(self.thread_start_reqid, handle_thread_start)
 
@@ -229,8 +266,9 @@ class JvmDebugger():
         evt_req.eventKind = Byte(Jdwp.EventKind.THREAD_DEATH)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         self.thread_death_reqid = await self.jdwp.EventRequest.Set(evt_req)
+        print(f"enable_thread_death_events RequestID = {self.thread_death_reqid}")
 
-        def handle_thread_death(event, composite, wp):
+        async def handle_thread_death(event, composite, wp):
 
             # TODO: Do we check if it already existed?
             if event.thread in self.threads_by_id:
