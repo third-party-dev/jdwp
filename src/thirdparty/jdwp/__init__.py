@@ -1509,7 +1509,7 @@ class MethodSet():
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
                 bytecode, offset = Jdwp.parse_byte(data, offset, Byte)
-                bytecodes.append(bytecode)
+                self.bytecodes.append(bytecode)
             return self, offset
 
 

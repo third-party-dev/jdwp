@@ -114,6 +114,16 @@ class JvmDebugger():
     async def handle_breakpoint_event(event, composite, args):
         print("INSIDE BREAKPOINT")
         dbg, = args
+        # event.requestID
+        # event.thread
+        # event.location
+
+        req = dbg.jdwp.Method.BytecodesRequest()
+        req.refType = ReferenceTypeID(event.location.classID)
+        req.methodID = event.location.methodID
+        reply = await dbg.jdwp.Method.Bytecodes(req)
+        for byt in reply.bytecodes:
+            print(byt)
 
 
 
