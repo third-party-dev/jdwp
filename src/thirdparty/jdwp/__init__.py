@@ -164,41 +164,48 @@ class Jdwp():
     def __init__(self, host: str = 'localhost', port: int = 8700):
         self.host = host
         self.port = port
-        self.packet_id = 1
-        self.pending_requests = {}
-        self.event_loop = asyncio.get_running_loop()
-        self.event_queue = asyncio.Queue()
-        self.event_handler = {}
-
-        self.VirtualMachine = VirtualMachineSet(self)
-        self.ReferenceType = ReferenceTypeSet(self)
-        self.ClassType = ClassTypeSet(self)
-        self.ArrayType = ArrayTypeSet(self)
-        self.InterfaceType = InterfaceTypeSet(self)
-        self.Method = MethodSet(self)
-        self.Field = FieldSet(self)
-        self.ObjectReference = ObjectReferenceSet(self)
-        self.StringReference = StringReferenceSet(self)
-        self.ThreadReference = ThreadReferenceSet(self)
-        self.ThreadGroupReference = ThreadGroupReferenceSet(self)
-        self.ArrayReference = ArrayReferenceSet(self)
-        self.ClassLoaderReference = ClassLoaderReferenceSet(self)
-        self.EventRequest = EventRequestSet(self)
-        self.StackFrame = StackFrameSet(self)
-        self.ClassObjectReference = ClassObjectReferenceSet(self)
-        self.Event = EventSet(self)
+        self.started = False
 
 
     async def start(self):
-        self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
-        self.writer.write(Jdwp.HANDSHAKE)
-        await self.writer.drain()
-        resp = await self.reader.readexactly(len(Jdwp.HANDSHAKE))
-        if resp != Jdwp.HANDSHAKE:
-            raise RuntimeError("Failed to receive JDWP handshake.")
-        
-        asyncio.create_task(self.reader_loop())
-        asyncio.create_task(self.event_queue_consumer())
+        if not self.started:
+            self.packet_id = 1
+            self.pending_requests = {}
+            self.event_loop = asyncio.get_running_loop()
+            self.event_queue = asyncio.Queue()
+            self.event_handler = {}
+
+            self.VirtualMachine = VirtualMachineSet(self)
+            self.ReferenceType = ReferenceTypeSet(self)
+            self.ClassType = ClassTypeSet(self)
+            self.ArrayType = ArrayTypeSet(self)
+            self.InterfaceType = InterfaceTypeSet(self)
+            self.Method = MethodSet(self)
+            self.Field = FieldSet(self)
+            self.ObjectReference = ObjectReferenceSet(self)
+            self.StringReference = StringReferenceSet(self)
+            self.ThreadReference = ThreadReferenceSet(self)
+            self.ThreadGroupReference = ThreadGroupReferenceSet(self)
+            self.ArrayReference = ArrayReferenceSet(self)
+            self.ClassLoaderReference = ClassLoaderReferenceSet(self)
+            self.EventRequest = EventRequestSet(self)
+            self.StackFrame = StackFrameSet(self)
+            self.ClassObjectReference = ClassObjectReferenceSet(self)
+            self.Event = EventSet(self)
+
+            self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+            self.writer.write(Jdwp.HANDSHAKE)
+            await self.writer.drain()
+            resp = await self.reader.readexactly(len(Jdwp.HANDSHAKE))
+            if resp != Jdwp.HANDSHAKE:
+                raise RuntimeError("Failed to receive JDWP handshake.")
+            
+            asyncio.create_task(self.reader_loop())
+            asyncio.create_task(self.event_queue_consumer())
+
+            self.started = True
+        else:
+            print("Already started. Restarting not implemented or supported.")
 
         return self
 
@@ -2709,4 +2716,8 @@ class EventSet():
             return self, offset
 
 
-        
+'''
+The following classes are for runtime usage, not for serialization or parsing like the above classes.
+'''
+
+
