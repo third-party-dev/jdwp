@@ -1,6 +1,7 @@
 import asyncio
 from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, Long, ClassID
 
+from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
 
 import thirdparty.sandbox as __sandbox__
@@ -112,22 +113,223 @@ class JvmDebugger():
 
     @staticmethod
     async def handle_breakpoint_event(event, composite, args):
-        print("INSIDE BREAKPOINT")
+        print(f"Breakpoint: {event}")
         dbg, = args
         # event.requestID
         # event.thread
         # event.location
 
-        req = dbg.jdwp.Method.BytecodesRequest()
-        req.refType = ReferenceTypeID(event.location.classID)
-        req.methodID = event.location.methodID
-        reply = await dbg.jdwp.Method.Bytecodes(req)
-        for byt in reply.bytecodes:
-            print(byt)
+        # req = dbg.jdwp.Method.BytecodesRequest()
+        # req.refType = ReferenceTypeID(event.location.classID)
+        # req.methodID = event.location.methodID
+        # reply = await dbg.jdwp.Method.Bytecodes(req)
+
+        # TODO: Consider getting the bytecodes on CLASS_PREPARE.
+
+        # offset = 0
+        # prev_offset = -1
+        # ins_idx = 0
+        # while offset < len(example_bytecodes) and offset != prev_offset:
+        #     prev_offset = offset
+        #     ins, offset = disassemble(example_bytecodes, offset)
+        #     ins_bytecode = bytes(example_bytecodes[prev_offset:offset]).hex()
+        #     ins_bytecode_idx = f'{int(prev_offset/2):04x}'
+        #     print(f'{ins_idx}: {ins_bytecode_idx}: {ins} [bytecode: {ins_bytecode}]')
+        #     ins_idx += 1
+
+        # Example: dbg.step_into(event.thread)
+        await dbg.step_over(event.thread)
+        breakpoint()
+        await dbg.resume_vm()
+        # for byt in reply.bytecodes:
+        #     print(byt)
+        #     breakpoint()
+
+    async def load_method_bytecode(self, classID, methodID):
+
+        if classID in self.classes_by_id:
+            classInfo = self.classes_by_id[classID]
+            if methodID in classInfo.methods_by_id:
+                methodInfo = classInfo.methods_by_id[methodID]
+
+                if not methodInfo.bytecode:
+                    req = self.jdwp.Method.BytecodesRequest()
+                    req.refType = ReferenceTypeID(classID)
+                    req.methodID = methodID
+                    reply = await self.jdwp.Method.Bytecodes(req)
+                    methodInfo.bytecode = reply.bytecodes
+        
+                return methodInfo.bytecode
+
+        return None
+
+
+    @staticmethod
+    async def handle_step_event(event, composite, args):
+        print(f"Got step event: {event}")
+        
+        dbg, = args
+
+        bytecode = await dbg.load_method_bytecode(
+            event.location.classID, event.location.methodID)
+
+        offset = event.location.index * 2
+        prev_offset = offset
+        ins, offset = disassemble(bytecode, offset)
+        ins_bytecode = bytes(bytecode[prev_offset:offset]).hex()
+        ins_bytecode_idx = f'{int(prev_offset/2):04x}'
+        print(f'{ins_bytecode_idx}: {ins} [bytecode: {ins_bytecode}]')
+
+        if event.location.index >= 0x1e:
+            print("Doing frames analysis.")
+            frame_count = await dbg.jdwp.ThreadReference.FrameCount(event.thread)
+            print(f"Frame Count: {frame_count}")
+
+            frames_req = dbg.jdwp.ThreadReference.FramesRequest()
+            frames_req.thread = ThreadID(event.thread)
+            frames_req.startFrame = Int(0)
+            frames_req.length = Int(1) # -1 for everything
+
+            frames_reply = await dbg.jdwp.ThreadReference.Frames(frames_req)
+            
+            # TODO: Get the Method.VariableTable (class, method)
+            #       - Returns list of variables.
+            # TODO: Get the StackFrame.GetValues with slot index and type.
+
+            for frame in frames_reply.frames:
+                print(f"Frame: {frame}")
+
+                vtable_req = dbg.jdwp.Method.VariableTableRequest()
+                vtable_req.refType = frame.location.classID
+                vtable_req.methodID = frame.location.methodID
+                vtable_reply = await dbg.jdwp.Method.VariableTable(vtable_req)
+
+                print(f"argCnt: {vtable_reply.argCnt}")
+                for slot in vtable_reply.slots:
+                    print(slot)
+
+                # sframe_req = dbg.jdwp.StackFrame.GetValuesRequest()
+                # sframe_req.thread = event.thread
+                # sframe_req.frame = frame.frameID
+                
+                # slot_entry = dbg.jdwp.StackFrame.GetValueSlotEntry()
+                # slot_entry.slot = Int(# !!!!!!!)
+                # slot_entry.sigbyte = Byte(#!!!!!)
+                # sframe_req.slots.append(slot_entry)
+
+                # sframe_reply = await dbg.jdwp.StackFrame.GetValues(sframe_req)
+
+                # print(sframe_reply)
 
 
 
 
+
+
+
+
+
+
+                '''
+
+                    class GetValuesSlotEntry(BaseModel):
+                        model_config = ConfigDict(validate_assignment=True)
+                        slot: Optional[Int] = None
+                        sigbyte: Optional[Byte] = None
+
+                        def to_bytes(self) -> bytes:
+                            return b''.join([Jdwp.make_int(self.slot), Jdwp.make_byte(self.sigbyte)])
+                            
+
+                    class GetValuesRequest(BaseModel):
+                        model_config = ConfigDict(validate_assignment=True)
+                        thread: Optional[ThreadID] = None
+                        frame: Optional[FrameID] = None
+                        slots: List['GetValuesSlotEntry'] = []
+
+                        def to_bytes(self) -> bytes:
+                            out = [
+                                Jdwp.make_long(self.thread),
+                                Jdwp.make_long(self.frame),
+                                Jdwp.make_int(len(self.slots))
+                            ]
+                            out.extend([value.to_bytes() for slot in self.slots])
+                            return b''.join(out)
+
+
+                    class GetValuesReply(BaseModel):
+                        model_config = ConfigDict(validate_assignment=True)
+                        values: List[Value] = []
+
+                        def from_bytes(self, data, offset=0) -> Tuple['GetValuesReply', int]:
+                            count, offset = Jdwp.parse_int(data, offset)
+                            for _ in range(count):
+                                value, offset = Value().from_bytes(data, offset)
+                                self.values = [*self.values, value]
+                            return self, offset
+
+                    
+                    async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
+                        data, _, _, _ = await self.conn.send_and_recv(16, 1, data=request.to_bytes())
+                        return self.GetValuesReply().from_bytes(data)[0]
+
+
+                '''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            
+            # TODO: StackFrame.GetValues
+
+        await dbg.step_over(event.thread)
+        breakpoint()
+        await dbg.resume_vm()
+
+
+    async def single_step(self, threadID, step_depth):
+        evt_req = self.jdwp.EventRequest.SetRequest()
+        evt_req.eventKind = Byte(Jdwp.EventKind.SINGLE_STEP)
+        evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
+
+        mod = self.jdwp.EventRequest.SetStepModifier()
+        mod.thread = ThreadID(threadID)
+        mod.size = Int(Jdwp.StepSize.MIN) # LINE is multiple bytecode lines
+        mod.depth = Int(step_depth) #Jdwp.StepDepth.INTO
+        evt_req.modifiers.append(mod)
+
+        # TODO: The event supposidly only runs once anyway.
+        #mod = dbg.jdwp.EventRequest.SetCountModifier()
+        #mod.count = Int(1)
+        #evt_req.modifiers.append(mod)
+
+        reqid = await self.jdwp.EventRequest.Set(evt_req)
+        self.jdwp.register_event_handler(reqid, JvmDebugger.handle_step_event, (self,))
+
+
+    async def step_into(self, threadID):
+        await self.single_step(threadID, Jdwp.StepDepth.INTO)
+
+    async def step_over(self, threadID):
+        await self.single_step(threadID, Jdwp.StepDepth.OVER)
+    
+    async def step_out(self, threadID):
+        await self.single_step(threadID, Jdwp.StepDepth.OUT)
+
+        
 
 
     @staticmethod

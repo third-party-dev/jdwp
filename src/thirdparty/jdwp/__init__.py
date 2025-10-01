@@ -72,6 +72,16 @@ String = strict_typedef(type("String", (str,), {}))
 
 #UntaggedValue = strict_typedef(type("A", (int,), {}))
 
+class StepDepth():
+    INTO = 0
+    OVER = 1
+    OUT = 2
+
+class StepSize():
+    MIN = 0
+    LINE = 1
+
+
 
 class SuspendPolicy():
     NONE = 0x0
@@ -160,6 +170,8 @@ class Jdwp():
     EventKind = EventKind
     TypeTag = TypeTag
     SuspendPolicy = SuspendPolicy
+    StepDepth = StepDepth
+    StepSize = StepSize
 
     def __init__(self, host: str = 'localhost', port: int = 8700):
         self.host = host
@@ -320,7 +332,8 @@ class Jdwp():
 
     @staticmethod
     def make_int(val: int) -> bytes:
-        return struct.pack('>I', val)
+        # TODO: Consider a uint version?
+        return struct.pack('>i', val)
 
     @staticmethod
     def make_short(val: int) -> bytes:
@@ -1814,7 +1827,7 @@ class ThreadReferenceSet():
         return Jdwp.parse_long(data, 0, ThreadGroupID)[0]
 
 
-    class FeamesRequest(BaseModel):
+    class FramesRequest(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         thread: Optional[ThreadID] = None
         startFrame: Optional[Int] = None
@@ -1846,12 +1859,12 @@ class ThreadReferenceSet():
         def from_bytes(self, data, offset=0) -> Tuple['FramesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = FramesEntry().from_bytes(data, offset)
+                value, offset = ThreadReferenceSet.FramesEntry().from_bytes(data, offset)
                 self.frames = [*self.frames, value]
             return self, offset
     
 
-    async def Frames(self, request: FeamesRequest) -> FramesReply:
+    async def Frames(self, request: FramesRequest) -> FramesReply:
         data, _, _, _ = await self.conn.send_and_recv(11, 6, data=request.to_bytes())
         return self.FramesReply().from_bytes(data)[0]
     

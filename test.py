@@ -25,6 +25,19 @@ import pdb
 from fuzzyfinder import fuzzyfinder
 from pprint import pprint
 
+'''
+adb shell am set-debug-app -w sh.kau.playground ; \
+  adb shell am start \
+    -n $(adb shell cmd package resolve-activity \
+      -c android.intent.category.LAUNCHER sh.kau.playground | \
+        grep -oP 'name=\K\S+' | head -n 1 | \
+          sed -s 's/sh.kau.playground/sh.kau.playground\//') ; \
+  adb forward \
+    tcp:8700 \
+      jdwp:$(adb shell ps -A | grep sh.kau.playground | awk '{print $2}') ; \
+  sleep 2 && ./test.py
+'''
+
 
 # Keep these in global scope for remote REPL accessibility.
 jdwp = None
@@ -52,6 +65,9 @@ async def main():
   # - Set event breakpoint with callback for loaded class
   #   - Need classID, methodID and bytecode index (Default=0)
   # 
+
+  # TODO: Determine stepping ... maybe auto stops events after single fire?
+  # TODO: Determine variable examination.
 
   print("Setting up deferred breakpoint.")
   class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'

@@ -13,6 +13,8 @@ class MethodInfo():
     signature: Optional[String] = None
     modBits: Optional[Int] = None
 
+    bytecode = None
+
 class ClassInfo():
     refTypeTag: Optional[Byte] = None
     typeID: Optional[ReferenceTypeID] = None
