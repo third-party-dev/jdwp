@@ -249,27 +249,27 @@ class JvmDebugger():
                     getvalues_req.slots.append(slot_req)
                     print(f"  Slot: {slot}")
 
-
                 getvalues_reply, error_code = await dbg.jdwp.StackFrame.GetValues(getvalues_req)
-                print(f"  SF GetValues = {getvalues_reply}")
-                for entry in getvalues_reply.values:
-                    print(f"  Attempting to fetch fields for ObjectID: {entry.value}")
-                    reftype_reply = await dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))
-                    print(f"    Reftype Reply: {reftype_reply}")
+                print(f"  StackFrame.GetValues = {getvalues_reply}")
 
-                    # Make sure we know the fields
-                    await dbg.load_class_fields(reftype_reply.typeID)
-                    classInfo = dbg.classes_by_id[reftype_reply.typeID]
+                # for entry in getvalues_reply.values:
+                #     print(f"  Attempting to fetch fields for ObjectID: {entry.value}")
+                #     reftype_reply, _ = await dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))
+                #     print(f"    Reftype Reply: {reftype_reply}")
 
-                    getvalues_req = dbg.jdwp.ObjectReference.GetValuesRequest()
-                    getvalues_req.objectid = ObjectID(entry.value)
-                    for fieldID in classInfo.fields_by_id:
-                        print(f"    Requesting field: {classInfo.fields_by_id[fieldID].name}")
-                        getvalues_req.fields.append(FieldID(fieldID))
-                    getvalues_reply, error_code = await dbg.jdwp.ObjectReference.GetValues(getvalues_req)
-                    if error_code != 0:
-                        continue
-                    print(f"    {getvalues_reply}")
+                #     # Make sure we know the fields
+                #     await dbg.load_class_fields(reftype_reply.typeID)
+                #     classInfo = dbg.classes_by_id[reftype_reply.typeID]
+
+                #     getvalues_req = dbg.jdwp.ObjectReference.GetValuesRequest()
+                #     getvalues_req.objectid = ObjectID(entry.value)
+                #     for fieldID in classInfo.fields_by_id:
+                #         print(f"    Requesting field: {classInfo.fields_by_id[fieldID].name}")
+                #         getvalues_req.fields.append(FieldID(fieldID))
+                #     getvalues_reply, error_code = await dbg.jdwp.ObjectReference.GetValues(getvalues_req)
+                #     if error_code != 0:
+                #         continue
+                #     print(f"    {getvalues_reply}")
 
                     
                     #fields_reply, error_code = await dbg.jdwp.ReferenceType.Fields(ReferenceTypeID(entry.value))
@@ -280,7 +280,7 @@ class JvmDebugger():
                     
 
 
-
+            # TODO: Develop a simple CLI for inspecting objects.
             breakpoint()
 
 
