@@ -1,11 +1,17 @@
 
-from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, ThreadID, MethodID, ClassID
+from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, ThreadID, MethodID, ClassID, FieldID
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 
 class ThreadInfo():
     threadID: Optional[ThreadID] = None
     pass
+
+class FieldInfo():
+    fieldID: Optional[FieldID] = None
+    name: Optional[String] = None
+    signature: Optional[String] = None
+    modBits: Optional[Int] = None
 
 class MethodInfo():
     methodID: Optional[MethodID] = None
@@ -24,6 +30,11 @@ class ClassInfo():
     methods_by_id = {}
     methods_by_name = {}
     methods_by_signature = {}
+
+    fields_loaded = False
+    fields_by_id = {}
+    fields_by_signature = {}
+    #fields_by_name = {}
 
 class JvmDebuggerState():
   def __init__(self):

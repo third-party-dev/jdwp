@@ -35,7 +35,7 @@ adb shell am set-debug-app -w sh.kau.playground ; \
   adb forward \
     tcp:8700 \
       jdwp:$(adb shell ps -A | grep sh.kau.playground | awk '{print $2}') ; \
-  sleep 2 && ./test.py
+  sleep 3 && ./test.py
 '''
 
 
@@ -70,8 +70,12 @@ async def main():
   # TODO: Determine variable examination.
 
   print("Setting up deferred breakpoint.")
+
+
   class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
-  method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
+  #method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
+  method_signature = ('quoteForTheDay', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
+   
   await dbg.enable_deferred_breakpoint(class_signature, method_signature)
 
   await dbg.resume_vm()

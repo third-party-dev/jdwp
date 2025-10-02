@@ -1,5 +1,5 @@
 import asyncio
-from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, Long, ClassID
+from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, Long, ClassID, ObjectID
 
 from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
@@ -47,8 +47,8 @@ class JvmDebugger():
 
         # Always need idsizes and version information
         # TODO: Implement actually using these ... assuming always 64bit atm.
-        self.idsizes = await self.jdwp.VirtualMachine.IDSizes()
-        self.versions = await self.jdwp.VirtualMachine.Version()
+        self.idsizes, _ = await self.jdwp.VirtualMachine.IDSizes()
+        self.versions, _ = await self.jdwp.VirtualMachine.Version()
 
         # Always cache all prepared and unloaded classes
         await self.enable_class_prepare_events()
@@ -89,7 +89,7 @@ class JvmDebugger():
 
 
     async def update_class_methods(self, classID: ReferenceTypeID):
-        methods_reply = await self.jdwp.ReferenceType.Methods(classID)
+        methods_reply, _ = await self.jdwp.ReferenceType.Methods(classID)
         
         # TODO: Potential KeyError
         classInfo = self.classes_by_id[classID]
@@ -122,7 +122,7 @@ class JvmDebugger():
         # req = dbg.jdwp.Method.BytecodesRequest()
         # req.refType = ReferenceTypeID(event.location.classID)
         # req.methodID = event.location.methodID
-        # reply = await dbg.jdwp.Method.Bytecodes(req)
+        # reply, _ = await dbg.jdwp.Method.Bytecodes(req)
 
         # TODO: Consider getting the bytecodes on CLASS_PREPARE.
 
@@ -139,7 +139,7 @@ class JvmDebugger():
 
         # Example: dbg.step_into(event.thread)
         await dbg.step_over(event.thread)
-        breakpoint()
+        #breakpoint()
         await dbg.resume_vm()
         # for byt in reply.bytecodes:
         #     print(byt)
@@ -156,12 +156,31 @@ class JvmDebugger():
                     req = self.jdwp.Method.BytecodesRequest()
                     req.refType = ReferenceTypeID(classID)
                     req.methodID = methodID
-                    reply = await self.jdwp.Method.Bytecodes(req)
+                    reply, _ = await self.jdwp.Method.Bytecodes(req)
                     methodInfo.bytecode = reply.bytecodes
         
                 return methodInfo.bytecode
 
         return None
+
+    async def load_class_fields(self, classID):
+        if classID in self.classes_by_id:
+            classInfo = self.classes_by_id[classID]
+
+            if not classInfo.fields_loaded:
+                fields_reply, error_code = await self.jdwp.ReferenceType.Fields(ReferenceTypeID(classID))
+                if error_code != 0:
+                    return
+                for entry in fields_reply.declared:
+                    field = FieldInfo()
+                    field.fieldID = entry.fieldID
+                    field.name = entry.name
+                    field.signature = entry.signature
+                    field.modBits = entry.modBits
+                    classInfo.fields_by_id[field.fieldID] = field
+                    classInfo.fields_by_signature[(field.name, field.signature)] = field
+                    #print(f"CLASS({classID}) FIELD: {entry}")
+                classInfo.fields_loaded = True
 
 
     @staticmethod
@@ -180,123 +199,95 @@ class JvmDebugger():
         ins_bytecode_idx = f'{int(prev_offset/2):04x}'
         print(f'{ins_bytecode_idx}: {ins} [bytecode: {ins_bytecode}]')
 
-        if event.location.index >= 0x1e:
+        if event.location.index >= 0x4: #0x1e:
+            await dbg.jdwp.VirtualMachine.Suspend()
             print("Doing frames analysis.")
-            frame_count = await dbg.jdwp.ThreadReference.FrameCount(event.thread)
+            frame_count, _ = await dbg.jdwp.ThreadReference.FrameCount(event.thread)
             print(f"Frame Count: {frame_count}")
 
             frames_req = dbg.jdwp.ThreadReference.FramesRequest()
             frames_req.thread = ThreadID(event.thread)
             frames_req.startFrame = Int(0)
-            frames_req.length = Int(1) # -1 for everything
+            frames_req.length = Int(-1) # -1 for everything
 
-            frames_reply = await dbg.jdwp.ThreadReference.Frames(frames_req)
+            frames_reply, frames_err = await dbg.jdwp.ThreadReference.Frames(frames_req)
+            print(f"Frames Error: {frames_err}")
             
             # TODO: Get the Method.VariableTable (class, method)
             #       - Returns list of variables.
             # TODO: Get the StackFrame.GetValues with slot index and type.
 
+            idx = -1
             for frame in frames_reply.frames:
-                print(f"Frame: {frame}")
+                idx += 1
 
-                vtable_req = dbg.jdwp.Method.VariableTableRequest()
-                vtable_req.refType = frame.location.classID
-                vtable_req.methodID = frame.location.methodID
-                vtable_reply = await dbg.jdwp.Method.VariableTable(vtable_req)
-
-                print(f"argCnt: {vtable_reply.argCnt}")
-                for slot in vtable_reply.slots:
-                    print(slot)
-
-                # sframe_req = dbg.jdwp.StackFrame.GetValuesRequest()
-                # sframe_req.thread = event.thread
-                # sframe_req.frame = frame.frameID
                 
-                # slot_entry = dbg.jdwp.StackFrame.GetValueSlotEntry()
-                # slot_entry.slot = Int(# !!!!!!!)
-                # slot_entry.sigbyte = Byte(#!!!!!)
-                # sframe_req.slots.append(slot_entry)
 
-                # sframe_reply = await dbg.jdwp.StackFrame.GetValues(sframe_req)
+                print(f"-------------------- Frame[{idx}]: {frame}")
 
-                # print(sframe_reply)
+                # Filter all frames not in the current class/method.
+                if frame.location.classID != event.location.classID \
+                    or frame.location.methodID != event.location.methodID:
+                    continue
+                
+                vtable_req = dbg.jdwp.Method.VariableTableRequest()
+                vtable_req.refType = ReferenceTypeID(frame.location.classID)
+                vtable_req.methodID = MethodID(frame.location.methodID)
+                vtable_reply, vtable_err = await dbg.jdwp.Method.VariableTable(vtable_req)
+                if vtable_err != 0:
+                    print(f"  VTable Error: {vtable_err}")
+                    continue
 
-
-
-
-
-
-
-
-
-
-                '''
-
-                    class GetValuesSlotEntry(BaseModel):
-                        model_config = ConfigDict(validate_assignment=True)
-                        slot: Optional[Int] = None
-                        sigbyte: Optional[Byte] = None
-
-                        def to_bytes(self) -> bytes:
-                            return b''.join([Jdwp.make_int(self.slot), Jdwp.make_byte(self.sigbyte)])
-                            
-
-                    class GetValuesRequest(BaseModel):
-                        model_config = ConfigDict(validate_assignment=True)
-                        thread: Optional[ThreadID] = None
-                        frame: Optional[FrameID] = None
-                        slots: List['GetValuesSlotEntry'] = []
-
-                        def to_bytes(self) -> bytes:
-                            out = [
-                                Jdwp.make_long(self.thread),
-                                Jdwp.make_long(self.frame),
-                                Jdwp.make_int(len(self.slots))
-                            ]
-                            out.extend([value.to_bytes() for slot in self.slots])
-                            return b''.join(out)
+                print(f"  argCnt: {vtable_reply.argCnt}")
+                getvalues_req = dbg.jdwp.StackFrame.GetValuesRequest()
+                getvalues_req.thread = event.thread
+                getvalues_req.frame = frame.frameID
+                for slot in vtable_reply.slots:
+                    slot_req = dbg.jdwp.StackFrame.GetValuesSlotEntry()
+                    slot_req.slot = Int(slot.slot)
+                    slot_req.sigbyte = Byte(ord(slot.signature[0]))
+                    getvalues_req.slots.append(slot_req)
+                    print(f"  Slot: {slot}")
 
 
-                    class GetValuesReply(BaseModel):
-                        model_config = ConfigDict(validate_assignment=True)
-                        values: List[Value] = []
+                getvalues_reply, error_code = await dbg.jdwp.StackFrame.GetValues(getvalues_req)
+                print(f"  SF GetValues = {getvalues_reply}")
+                for entry in getvalues_reply.values:
+                    print(f"  Attempting to fetch fields for ObjectID: {entry.value}")
+                    reftype_reply = await dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))
+                    print(f"    Reftype Reply: {reftype_reply}")
 
-                        def from_bytes(self, data, offset=0) -> Tuple['GetValuesReply', int]:
-                            count, offset = Jdwp.parse_int(data, offset)
-                            for _ in range(count):
-                                value, offset = Value().from_bytes(data, offset)
-                                self.values = [*self.values, value]
-                            return self, offset
+                    # Make sure we know the fields
+                    await dbg.load_class_fields(reftype_reply.typeID)
+                    classInfo = dbg.classes_by_id[reftype_reply.typeID]
+
+                    getvalues_req = dbg.jdwp.ObjectReference.GetValuesRequest()
+                    getvalues_req.objectid = ObjectID(entry.value)
+                    for fieldID in classInfo.fields_by_id:
+                        print(f"    Requesting field: {classInfo.fields_by_id[fieldID].name}")
+                        getvalues_req.fields.append(FieldID(fieldID))
+                    getvalues_reply, error_code = await dbg.jdwp.ObjectReference.GetValues(getvalues_req)
+                    if error_code != 0:
+                        continue
+                    print(f"    {getvalues_reply}")
 
                     
-                    async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-                        data, _, _, _ = await self.conn.send_and_recv(16, 1, data=request.to_bytes())
-                        return self.GetValuesReply().from_bytes(data)[0]
-
-
-                '''
-
-
-
+                    #fields_reply, error_code = await dbg.jdwp.ReferenceType.Fields(ReferenceTypeID(entry.value))
+                    #if error_code != 0:
+                    #    continue
+                    #for declared in fields_reply.declared:
+                    #    print(declared)
+                    
 
 
 
+            breakpoint()
 
 
 
-
-
-
-
-
-
-
-
-            
-            # TODO: StackFrame.GetValues
 
         await dbg.step_over(event.thread)
-        breakpoint()
+        #breakpoint()
         await dbg.resume_vm()
 
 
@@ -316,7 +307,7 @@ class JvmDebugger():
         #mod.count = Int(1)
         #evt_req.modifiers.append(mod)
 
-        reqid = await self.jdwp.EventRequest.Set(evt_req)
+        reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
         self.jdwp.register_event_handler(reqid, JvmDebugger.handle_step_event, (self,))
 
 
@@ -371,7 +362,7 @@ class JvmDebugger():
                 mod.count = Int(1)
                 evt_req.modifiers.append(mod)
 
-                reqid = await dbg.jdwp.EventRequest.Set(evt_req)
+                reqid, _ = await dbg.jdwp.EventRequest.Set(evt_req)
                 dbg.jdwp.register_event_handler(reqid, JvmDebugger.handle_breakpoint_event, (dbg,))
 
                 
@@ -391,7 +382,7 @@ class JvmDebugger():
         evt_req.modifiers.append(mod)
 
         # TODO: add a class matcher or something here?
-        reqid = await self.jdwp.EventRequest.Set(evt_req)
+        reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
 
         print(f"Registered handle_deferred_breakpoint_class_prepare callback (reqid {reqid}).")
         self.jdwp.register_event_handler(reqid, JvmDebugger.handle_deferred_breakpoint_class_prepare, (self, class_signature, method_signature, bytecode_index))
@@ -404,7 +395,7 @@ class JvmDebugger():
         evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
-        self.class_prepare_reqid = await self.jdwp.EventRequest.Set(evt_req)
+        self.class_prepare_reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
         print(f"enable_class_prepare_events RequestID = {self.class_prepare_reqid}")
 
         self.jdwp.register_event_handler(self.class_prepare_reqid, JvmDebugger.handle_class_prepare, self)
@@ -412,7 +403,7 @@ class JvmDebugger():
 
     async def request_all_classes(self):
         #print("VirtualMachine.AllClassesWithGeneric()")
-        all_classes_reply = await self.jdwp.VirtualMachine.AllClassesWithGeneric()
+        all_classes_reply, _ = await self.jdwp.VirtualMachine.AllClassesWithGeneric()
 
         #db['all_classes_reply1'] = all_classes_reply
         #i = 0
@@ -435,7 +426,7 @@ class JvmDebugger():
         evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_UNLOAD)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
-        self.class_unload_reqid = await self.jdwp.EventRequest.Set(evt_req)
+        self.class_unload_reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
         print(f"enable_class_unload_events RequestID = {self.class_unload_reqid}")
 
         async def handle_class_unload(event, composite, wp):
@@ -459,7 +450,7 @@ class JvmDebugger():
         #evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
-        self.thread_start_reqid = await self.jdwp.EventRequest.Set(evt_req)
+        self.thread_start_reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
         print(f"enable_thread_start_events RequestID = {self.thread_start_reqid}")
 
         async def handle_thread_start(event, composite, wp):
@@ -477,7 +468,7 @@ class JvmDebugger():
         evt_req = self.jdwp.EventRequest.SetRequest()
         evt_req.eventKind = Byte(Jdwp.EventKind.THREAD_DEATH)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
-        self.thread_death_reqid = await self.jdwp.EventRequest.Set(evt_req)
+        self.thread_death_reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
         print(f"enable_thread_death_events RequestID = {self.thread_death_reqid}")
 
         async def handle_thread_death(event, composite, wp):
@@ -494,7 +485,7 @@ class JvmDebugger():
 
 
     async def request_all_threads(self):
-        thread_reply = await self.jdwp.VirtualMachine.AllThreads()
+        thread_reply, _ = await self.jdwp.VirtualMachine.AllThreads()
         for t in thread_reply.threads:
             threadInfo = ThreadInfo()
             threadInfo.threadID = t

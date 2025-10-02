@@ -81,8 +81,6 @@ class StepSize():
     MIN = 0
     LINE = 1
 
-
-
 class SuspendPolicy():
     NONE = 0x0
     EVENT_THREAD = 0x1
@@ -161,6 +159,68 @@ class Tag():
         CLASS_OBJECT,
     ]
 
+class Error():
+    NONE = 0
+
+    string = {
+        0: "NONE",
+        10: "INVALID_THREAD",
+        11: "INVALID_THREAD_GROUP",
+        12: "INVALID_PRIORITY",
+        13: "THREAD_NOT_SUSPENDED",
+        14: "THREAD_SUSPENDED",
+        15: "THREAD_NOT_ALIVE",
+        20: "INVALID_OBJECT",
+        21: "INVALID_CLASS",
+        22: "CLASS_NOT_PREPARED",
+        23: "INVALID_METHODID",
+        24: "INVALID_LOCATION",
+        25: "INVALID_FIELDID",
+        30: "INVALID_FRAMEID",
+        31: "NO_MORE_FRAMES",
+        32: "OPAQUE_FRAME",
+        33: "NOT_CURRENT_FRAME",
+        34: "TYPE_MISMATCH",
+        35: "INVALID_SLOT",
+        40: "DUPLICATE",
+        41: "NOT_FOUND",
+        50: "INVALID_MONITOR",
+        51: "NOT_MONITOR_OWNER",
+        52: "INTERRUPT",
+        60: "INVALID_CLASS_FORMAT",
+        61: "CIRCULAR_CLASS_DEFINITION",
+        62: "FAILS_VERIFICATION",
+        63: "ADD_METHOD_NOT_IMPLEMENTED",
+        64: "SCHEMA_CHANGE_NOT_IMPLEMENTED",
+        65: "INVALID_TYPESTATE",
+        66: "HIERARCHY_CHANGE_NOT_IMPLEMENTED",
+        67: "DELETE_METHOD_NOT_IMPLEMENTED",
+        68: "UNSUPPORTED_VERSION",
+        69: "NAMES_DONT_MATCH",
+        70: "CLASS_MODIFIERS_CHANGE_NOT_IMPLEMENTED",
+        71: "METHOD_MODIFIERS_CHANGE_NOT_IMPLEMENTED",
+        99: "NOT_IMPLEMENTED",
+        100: "NULL_POINTER",
+        101: "ABSENT_INFORMATION",
+        102: "INVALID_EVENT_TYPE",
+        103: "ILLEGAL_ARGUMENT",
+        110: "OUT_OF_MEMORY",
+        111: "ACCESS_DENIED",
+        112: "VM_DEAD",
+        113: "INTERNAL",
+        115: "UNATTACHED_THREAD",
+        500: "INVALID_TAG",
+        502: "ALREADY_INVOKING",
+        503: "INVALID_INDEX",
+        504: "INVALID_LENGTH",
+        506: "INVALID_STRING",
+        507: "INVALID_CLASS_LOADER",
+        508: "INVALID_ARRAY",
+        509: "TRANSPORT_LOAD",
+        510: "TRANSPORT_INIT",
+        511: "NATIVE_METHOD",
+        512: "INVALID_COUNT",
+    }
 
 class Jdwp():
     HANDSHAKE = b'JDWP-Handshake'
@@ -172,6 +232,8 @@ class Jdwp():
     SuspendPolicy = SuspendPolicy
     StepDepth = StepDepth
     StepSize = StepSize
+    Error = Error
+
 
     def __init__(self, host: str = 'localhost', port: int = 8700):
         self.host = host
@@ -226,13 +288,15 @@ class Jdwp():
         while True:
             data, pkt, flags, error_code = await self.recv()
 
+            if error_code != 0:
+                print(f"JDWP error code {self.Error.string[error_code]} [{error_code}]\nData: {data.hex()}")
+
             if flags & Jdwp.REPLY_PACKET:
                 fut = self.pending_requests.pop(pkt, None)
                 if fut:
                     fut.set_result((data, pkt, flags, error_code))
             else:
                 # Incoming event
-                #print(f"EVENT RECEIVED: {data[0:64].hex()}")
                 offset = 0
                 cmdset, cmd = struct.unpack('>BB', data[offset:offset+2])
                 offset += 2
@@ -251,7 +315,6 @@ class Jdwp():
     async def event_queue_consumer(self):
         while True:
             composite = await self.event_queue.get()
-            #print(f"EVENT: {composite}")
             for event in composite.events:
                 if event.requestID in self.event_handler:
                     # TODO: How do we handle the async nature of this?
@@ -266,7 +329,6 @@ class Jdwp():
         pkt = self.packet_id
         self.packet_id += 1
         packet = struct.pack('>IIBBB', length, pkt, flags, cmdset, cmd) + data
-        #print(f"Sent Packet: len {length} pkt {pkt} cmdset {cmdset} cmd {cmd}")
         if expect_reply:
             self.pending_requests[pkt] = self.event_loop.create_future()
         self.writer.write(packet)
@@ -279,7 +341,7 @@ class Jdwp():
         return await self.send(cmdset, cmd, data, True)
 
 
-    async def recv(self, ignore_error=False):
+    async def recv(self):
         header = await self.reader.readexactly(9)
         length, pkt, flags = struct.unpack('>IIB', header)
         data_length = length - 9
@@ -288,14 +350,9 @@ class Jdwp():
         if flags == Jdwp.REPLY_PACKET:
             err_data = await self.reader.readexactly(2)
             error_code = struct.unpack('>H', err_data)[0]
-            if not ignore_error and error_code != 0:
-                raise RuntimeError(f"JDWP error code {error_code}")
             data_length -= 2
         
         data = await self.reader.readexactly(data_length)
-        
-        #print(f"Recv'd Header: len {length} pkt {pkt} flags {flags} error {error_code}")
-        #print(f"Recv'd Data: {data.hex()}")
         return data, pkt, flags, error_code
     
 
@@ -305,55 +362,58 @@ class Jdwp():
         offset += 4
         value = (data[offset:offset+str_len].decode('utf-8'), offset + str_len)
         return (cast(value[0]), value[1]) if cast else value
-    
+
+
     @staticmethod
     def parse_long(data, offset, cast=None):
         value = struct.unpack('>Q', data[offset:offset+8])[0], offset + 8
         return (cast(value[0]), value[1]) if cast else value
 
+
     @staticmethod
     def parse_int(data, offset, cast=None):
         value = struct.unpack('>I', data[offset:offset+4])[0], offset + 4
         return (cast(value[0]), value[1]) if cast else value
-    
+
+
     @staticmethod
     def parse_short(data, offset, cast=None):
         value = struct.unpack('>H', data[offset:offset+2])[0], offset + 2
         return (cast(value[0]), value[1]) if cast else value
 
+
     @staticmethod
     def parse_byte(data, offset, cast=None):
         value = data[offset], offset + 1
         return (cast(value[0]), value[1]) if cast else value
-    
+
+
     @staticmethod
     def make_long(val: int) -> bytes:
         return struct.pack('>Q', val)
+
 
     @staticmethod
     def make_int(val: int) -> bytes:
         # TODO: Consider a uint version?
         return struct.pack('>i', val)
 
+
     @staticmethod
     def make_short(val: int) -> bytes:
         return struct.pack('>H', val)
 
+
     @staticmethod
     def make_byte(val: int) -> bytes:
         return bytes([val])
+
 
     @staticmethod
     def make_string(str_val: str) -> bytes:
         return Jdwp.make_int(len(str_val)) + str_val.encode('utf-8')
 
 
-
-
-
-
-# !! Untested.
-# !! This should only look at object IDs (in contrast to a Value object)
 class TaggedObjectID(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
     tag: Optional[Byte] = None
@@ -369,7 +429,6 @@ class TaggedObjectID(BaseModel):
         return self, offset
         
 
-# !! Untested.
 class Value(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
     tag: Optional[Byte] = None
@@ -378,15 +437,15 @@ class Value(BaseModel):
 
     def from_bytes(self, data, offset=0) -> Tuple['Value', int]:
         self.tag, offset = Jdwp.parse_byte(data, offset, Byte)
-        if tag in Tag.u0:
+        if self.tag in Tag.u0:
             return self, offset
-        elif tag in Tag.u8:
+        elif self.tag in Tag.u8:
             self.value, offset = Jdwp.parse_byte(data, offset, Long)
-        elif tag in Tag.u16:
+        elif self.tag in Tag.u16:
             self.value, offset = Jdwp.parse_short(data, offset, Long)
-        elif tag in Tag.u32:
+        elif self.tag in Tag.u32:
             self.value, offset = Jdwp.parse_int(data, offset, Long)
-        elif tag in Tag.u64:
+        elif self.tag in Tag.u64:
             self.value, offset = Jdwp.parse_long(data, offset, Long)
         else:
             raise RuntimeError(f"Value tag not defined in from_bytes(). (Tag: {tag})")
@@ -394,15 +453,15 @@ class Value(BaseModel):
         return self, offset
     
     def to_bytes(self) -> bytes:
-        if tag in Tag.u0:
+        if self.tag in Tag.u0:
             return b''.join([Jdwp.make_byte(self.tag)])
-        elif tag in Tag.u8:
+        elif self.tag in Tag.u8:
             return b''.join([Jdwp.make_byte(self.tag), Jdwp.make_byte(self.value)])
-        elif tag in Tag.u16:
+        elif self.tag in Tag.u16:
             return b''.join([Jdwp.make_byte(self.tag), Jdwp.make_short(self.value)])
-        elif tag in Tag.u32:
+        elif self.tag in Tag.u32:
             return b''.join([Jdwp.make_byte(self.tag), Jdwp.make_int(self.value)])
-        elif tag in Tag.u64:
+        elif self.tag in Tag.u64:
             return b''.join([Jdwp.make_byte(self.tag), Jdwp.make_long(self.value)])
         
         raise RuntimeError(f"Value tag not defined in to_bytes(). (Tag: {tag})")
@@ -470,7 +529,6 @@ class ArrayRegion(BaseModel):
         return self, offset
 
 
-
 class VirtualMachineSet():
 
     def __init__(self, conn):
@@ -495,8 +553,10 @@ class VirtualMachineSet():
 
 
     async def Version(self) -> VersionReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 1)
-        return self.VersionReply().from_bytes(data)[0]
+        data, _, _, error_code = await self.conn.send_and_recv(1, 1)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.VersionReply().from_bytes(data)[0], error_code
 
 
     class ClassesBySignatureEntry(BaseModel):
@@ -519,14 +579,16 @@ class VirtualMachineSet():
         def from_bytes(self, data, offset=0) -> Tuple['ClassesBySignatureReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = ClassesBySignatureEntry().from_bytes(data, offset)
+                value, offset = VirtualMachineSet.ClassesBySignatureEntry().from_bytes(data, offset)
                 self.classes = [*self.classes, value]
             return self, offset
 
 
-    async def ClassesBySignature(self, signature: String) -> ClassesBySignatureReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 2, data=Jdwp.make_string(signature))
-        return self.ClassesBySignatureReply().from_bytes(data)[0]
+    async def ClassesBySignature(self, signature: String) -> Tuple[ClassesBySignatureReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 2, data=Jdwp.make_string(signature))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ClassesBySignatureReply().from_bytes(data)[0], error_code
 
 
     class AllClassesEntry(BaseModel):
@@ -551,14 +613,16 @@ class VirtualMachineSet():
         def from_bytes(self, data, offset=0) -> Tuple['AllClassesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = AllClassesEntry().from_bytes(data, offset)
+                value, offset = VirtualMachineSet.AllClassesEntry().from_bytes(data, offset)
                 self.classes = [*self.classes, value]
             return self, offset
 
 
-    async def AllClasses(self) -> AllClassesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 3)
-        return AllClassesReply().from_bytes(data)[0]
+    async def AllClasses(self) -> Tuple[AllClassesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 3)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return AllClassesReply().from_bytes(data)[0], error_code
     
 
     class AllThreadsReply(BaseModel):
@@ -573,9 +637,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def AllThreads(self) -> AllClassesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 4)
-        return self.AllThreadsReply().from_bytes(data)[0]
+    async def AllThreads(self) -> Tuple[AllClassesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 4)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.AllThreadsReply().from_bytes(data)[0], error_code
     
 
     class TopLevelThreadGroupReply(BaseModel):
@@ -590,9 +656,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def TopLevelThreadGroup(self) -> TopLevelThreadGroupReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 5)
-        return self.TopLevelThreadGroupReply().from_bytes(data)[0]
+    async def TopLevelThreadGroup(self) -> Tuple[TopLevelThreadGroupReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 5)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.TopLevelThreadGroupReply().from_bytes(data)[0], error_code
     
 
     async def Dispose(self) -> None:
@@ -616,14 +684,15 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def IDSizes(self) -> IDSizesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 7)
-        return self.IDSizesReply().from_bytes(data)[0]
+    async def IDSizes(self) -> Tuple[IDSizesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 7)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.IDSizesReply().from_bytes(data)[0], error_code
     
 
     async def Suspend(self) -> None:
         await self.conn.send(1, 8)
-        #data, _, _, error_code = await self.conn.recv()
     
 
     async def Resume(self) -> None:
@@ -634,9 +703,11 @@ class VirtualMachineSet():
         await self.conn.send(1, 10, data=Jdwp.make_int(exit_code))
 
 
-    async def CreateString(self, utf: String) -> StringID:
-        data, _, _, _ = await self.conn.send_and_recv(1, 11, data=Jdwp.make_string(utf))
-        return Jdwp.parse_long(data, 0, String)[0]
+    async def CreateString(self, utf: String) -> Tuple[StringID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 11, data=Jdwp.make_string(utf))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, 0, String)[0], error_code
 
 
     class CapabilitiesReply(BaseModel):
@@ -660,9 +731,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def Capabilities(self) -> CapabilitiesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 12)
-        return self.CapabilitiesReply().from_bytes(data)[0]
+    async def Capabilities(self) -> Tuple[CapabilitiesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 12)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.CapabilitiesReply().from_bytes(data)[0], error_code
 
 
     class ClassPathsReply(BaseModel):
@@ -676,7 +749,6 @@ class VirtualMachineSet():
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
                 entry, offset = Jdwp.parse_string(data, offset, String)
-                print(entry)
                 self.classpaths = [*self.classpaths, entry]
             
             count, offset = Jdwp.parse_int(data, offset)
@@ -686,9 +758,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def ClassPaths(self) -> ClassPathsReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 13)
-        return self.ClassPathsReply().from_bytes(data)[0]
+    async def ClassPaths(self) -> Tuple[ClassPathsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 13)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ClassPathsReply().from_bytes(data)[0], error_code
     
 
     class DisposeObjectsEntry(BaseModel):
@@ -799,9 +873,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def CapabilitiesNew(self) -> CapabilitiesNewReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 17)
-        return self.CapabilitiesNewReply().from_bytes(data)[0]
+    async def CapabilitiesNew(self) -> Tuple[CapabilitiesNewReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 17)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.CapabilitiesNewReply().from_bytes(data)[0], error_code
 
 
     class RedefineClassesRequest(BaseModel):
@@ -855,9 +931,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def AllClassesWithGeneric(self) -> AllClassesWithGenericReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 20)
-        return self.AllClassesWithGenericReply().from_bytes(data)[0]
+    async def AllClassesWithGeneric(self) -> Tuple[AllClassesWithGenericReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 20)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.AllClassesWithGenericReply().from_bytes(data)[0], error_code
 
 
     class InstanceCountsRequest(BaseModel):
@@ -882,9 +960,11 @@ class VirtualMachineSet():
             return self, offset
 
 
-    async def InstanceCounts(self, request: InstanceCountsRequest) -> InstanceCountsReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 21, data=request.to_bytes())
-        return self.InstanceCountsReply().from_bytes(data)[0]
+    async def InstanceCounts(self, request: InstanceCountsRequest) -> Tuple[InstanceCountsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 21, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InstanceCountsReply().from_bytes(data)[0], error_code
 
 
 class ReferenceTypeSet():
@@ -893,19 +973,25 @@ class ReferenceTypeSet():
         self.conn = conn
     
 
-    async def Signature(self, refType: ReferenceTypeID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(2, 1, data=Jdwp.make_long(refType))
-        return Jdwp.parse_string(data, 0, String)[0]
+    async def Signature(self, refType: ReferenceTypeID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 1, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, 0, String)[0], error_code
 
 
-    async def ClassLoader(self, refType: ReferenceTypeID) -> ClassLoaderID:
-        data, _, _, _ = await self.conn.send_and_recv(2, 2, data=Jdwp.make_long(refType))
-        return Jdwp.parse_long(data, 0, ClassLoaderID)[0]
+    async def ClassLoader(self, refType: ReferenceTypeID) -> Tuple[ClassLoaderID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 2, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, 0, ClassLoaderID)[0], error_code
 
     
-    async def Modifiers(self, refType: ReferenceTypeID) -> Int:
-        data, _, _, _ = await self.conn.send_and_recv(2, 3, data=Jdwp.make_long(refType))
-        return Jdwp.parse_int(data, 0, Int)[0]
+    async def Modifiers(self, refType: ReferenceTypeID) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 3, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, 0, Int)[0], error_code
 
 
     class FieldsDeclaredEntry(BaseModel):
@@ -930,14 +1016,16 @@ class ReferenceTypeSet():
         def from_bytes(self, data, offset=0) -> Tuple['FieldsReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                entry, offset = FieldsDeclaredEntry().from_bytes(data, offset)
+                entry, offset = ReferenceTypeSet.FieldsDeclaredEntry().from_bytes(data, offset)
                 self.declared = [*self.declared, entry]
             return self, offset
 
     
-    async def Fields(self, refType: ReferenceTypeID) -> FieldsReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 4, data=Jdwp.make_long(refType))
-        return self.FieldsReply().from_bytes(data)[0]
+    async def Fields(self, refType: ReferenceTypeID) -> Tuple[FieldsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 4, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.FieldsReply().from_bytes(data)[0], error_code
 
 
     class MethodsDeclaredEntry(BaseModel):
@@ -967,9 +1055,11 @@ class ReferenceTypeSet():
             return self, offset
 
 
-    async def Methods(self, refType: ReferenceTypeID) -> MethodsReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 5, data=Jdwp.make_long(refType))
-        return self.MethodsReply().from_bytes(data)[0]
+    async def Methods(self, refType: ReferenceTypeID) -> Tuple[MethodsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 5, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.MethodsReply().from_bytes(data)[0], error_code
 
     
     # !! Need to implement TaggedValues
@@ -997,14 +1087,18 @@ class ReferenceTypeSet():
             return self, offset
 
 
-    async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 6, data=request.to_bytes())
-        return self.GetValuesReply().from_bytes(data)[0]
+    async def GetValues(self, request: GetValuesRequest) -> Tuple[GetValuesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 6, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.GetValuesReply().from_bytes(data)[0], error_code
 
 
-    async def SourceFile(self, refType: ReferenceTypeID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(2, 7, data=Jdwp.make_long(refType))
-        return Jdwp.parse_string(data, 0, String)[0]
+    async def SourceFile(self, refType: ReferenceTypeID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 7, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, 0, String)[0], error_code
 
 
     class NestedTypesEntry(BaseModel):
@@ -1025,19 +1119,23 @@ class ReferenceTypeSet():
         def from_bytes(self, data, offset=0) -> Tuple['NestedTypesReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = NestedTypesEntry().from_bytes(data)
+                value, offset = ReferenceTypeSet.NestedTypesEntry().from_bytes(data)
                 self.classes = [*self.classes, value]
             return self, offset
 
     
-    async def NestedTypes(self, refType: ReferenceTypeID) -> NestedTypesReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 8, data=Jdwp.make_long(refType))
-        return self.NestedTypesReply().from_bytes(data)[0]
+    async def NestedTypes(self, refType: ReferenceTypeID) -> Tuple[NestedTypesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 8, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.NestedTypesReply().from_bytes(data)[0], error_code
     
 
-    async def Status(self, refType: ReferenceTypeID):
-        data, _, _, _ = await self.conn.send_and_recv(2, 9, data=Jdwp.make_long(refType))
-        return Jdwp.parse_int(data, 0, Int)[0]
+    async def Status(self, refType: ReferenceTypeID) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 9, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, 0, Int)[0], error_code
 
 
     class InterfacesReply(BaseModel):
@@ -1052,19 +1150,25 @@ class ReferenceTypeSet():
             return self, offset
 
     
-    async def Interfaces(self, refType: ReferenceTypeID) -> InterfacesReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 10, data=Jdwp.make_long(refType))
-        return self.InterfacesReply().from_bytes(data)[0]
+    async def Interfaces(self, refType: ReferenceTypeID) -> Tuple[InterfacesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 10, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InterfacesReply().from_bytes(data)[0], error_code
 
 
-    async def ClassObject(self, refType: ReferenceTypeID) -> ClassObjectID:
-        data, _, _, _ = await self.conn.send_and_recv(2, 11, data=Jdwp.make_long(refType))
-        return Jdwp.parse_long(data, 0, ClassObjectID)[0]
+    async def ClassObject(self, refType: ReferenceTypeID) -> Tuple[ClassObjectID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 11, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, 0, ClassObjectID)[0], error_code
     
 
-    async def SourceDebugExtension(self, refType: ReferenceTypeID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(2, 12, data=Jdwp.make_long(refType))
-        return Jdwp.parse_string(data, 0, String)[0]
+    async def SourceDebugExtension(self, refType: ReferenceTypeID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 12, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, 0, String)[0], error_code
 
     
     class SignatureWithGenericReply(BaseModel):
@@ -1078,9 +1182,11 @@ class ReferenceTypeSet():
             return self, offset
 
 
-    async def SignatureWithGeneric(self, refType: ReferenceTypeID) -> SignatureWithGenericReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 13, data=Jdwp.make_long(refType))
-        return self.SignatureWithGenericReply().from_bytes(data)[0]
+    async def SignatureWithGeneric(self, refType: ReferenceTypeID) -> Tuple[SignatureWithGenericReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 13, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.SignatureWithGenericReply().from_bytes(data)[0], error_code
     
 
     class FieldsWithGenericEntry(BaseModel):
@@ -1107,14 +1213,16 @@ class ReferenceTypeSet():
         def from_bytes(self, data, offset=0) -> Tuple['FieldsWithGenericReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = FieldsWithGenericEntry().from_bytes(data)
+                value, offset = ReferenceTypeSet.FieldsWithGenericEntry().from_bytes(data)
                 self.declared = [*self.declared, value]
             return self, offset
 
 
-    async def FieldsWithGeneric(self, refType: ReferenceTypeID) -> FieldsWithGenericReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 14, data=Jdwp.make_long(refType))
-        return self.FieldsWithGenericReply().from_bytes(data)[0]
+    async def FieldsWithGeneric(self, refType: ReferenceTypeID) -> Tuple[FieldsWithGenericReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 14, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.FieldsWithGenericReply().from_bytes(data)[0], error_code
 
 
     class MethodsWithGenericEntry(BaseModel):
@@ -1141,14 +1249,16 @@ class ReferenceTypeSet():
         def from_bytes(self, data, offset=0) -> Tuple['MethodsWithGenericReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = MethodsWithGenericEntry().from_bytes(data)
+                value, offset = ReferenceTypeSet.MethodsWithGenericEntry().from_bytes(data)
                 self.declared = [*self.declared, value]
             return self, offset
 
     
-    async def MethodsWithGeneric(self, refType: ReferenceTypeID) -> MethodsWithGenericReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 15, data=Jdwp.make_long(refType))
-        return self.MethodsWithGenericReply().from_bytes(data)[0]
+    async def MethodsWithGeneric(self, refType: ReferenceTypeID) -> Tuple[MethodsWithGenericReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 15, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.MethodsWithGenericReply().from_bytes(data)[0], error_code
 
 
     class InstancesRequest(BaseModel):
@@ -1172,9 +1282,11 @@ class ReferenceTypeSet():
             return self, offset
 
     
-    async def Instances(self, request: InstancesRequest) -> InstancesReply:
-        data, _, _, _ = await self.conn.send_and_recv(1, 16, data=request.to_bytes())
-        return self.InstancesReply().from_bytes(data)[0]
+    async def Instances(self, request: InstancesRequest) -> Tuple[InstancesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(1, 16, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InstancesReply().from_bytes(data)[0], error_code
         
     
     class ClassFileVersionReply(BaseModel):
@@ -1188,9 +1300,11 @@ class ReferenceTypeSet():
             return self, offset
 
     
-    async def ClassFileVersion(self, refType: ReferenceTypeID) -> ClassFileVersionReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 17, data=Jdwp.make_long(refType))
-        return self.ClassFileVersionReply().from_bytes(data)[0]
+    async def ClassFileVersion(self, refType: ReferenceTypeID) -> Tuple[ClassFileVersionReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 17, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ClassFileVersionReply().from_bytes(data)[0], error_code
 
 
     class ConstantPoolReply(BaseModel):
@@ -1200,16 +1314,18 @@ class ReferenceTypeSet():
 
         def from_bytes(self, data, offset=0) -> Tuple['ConstantPoolReply', int]:
             self.count, offset = Jdwp.parse_int(data, offset, Int)
-            count, offset = Jdwp.parse_int(data, offset)
-            for _ in range(count):
+            cnt, offset = Jdwp.parse_int(data, offset)
+            for _ in range(cnt):
                 value, offset = Jdwp.parse_byte(data, offset, Byte)
                 self.cpbytes = [*self.cpbytes, value]
             return self, offset
 
     
-    async def ConstantPool(self, refType: ReferenceTypeID) -> ConstantPoolReply:
-        data, _, _, _ = await self.conn.send_and_recv(2, 18, data=Jdwp.make_long(refType))
-        return self.ConstantPoolReply().from_bytes(data)[0]
+    async def ConstantPool(self, refType: ReferenceTypeID) -> Tuple[ConstantPoolReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(2, 18, data=Jdwp.make_long(refType))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ConstantPoolReply().from_bytes(data)[0], error_code
 
     
 class ClassTypeSet():
@@ -1218,9 +1334,11 @@ class ClassTypeSet():
         self.conn = conn
 
 
-    async def Superclass(self, clazz: ClassID) -> ClassID:
-        data, _, _, _ = await self.conn.send_and_recv(3, 1, data=Jdwp.make_long(clazz))
-        return Jdwp.parse_long(data, 0, ClassID)[0]
+    async def Superclass(self, clazz: ClassID) -> Tuple[ClassID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(3, 1, data=Jdwp.make_long(clazz))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, 0, ClassID)[0], error_code
 
     
 
@@ -1309,9 +1427,11 @@ class ClassTypeSet():
             return self, offset
 
 
-    async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        data, _, _, _ = await self.conn.send_and_recv(3, 3, data=request.to_bytes())
-        return self.InvokeMethodReply().from_bytes(data)[0]
+    async def InvokeMethod(self, request: InvokeMethodRequest) -> Tuple[InvokeMethodReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(3, 3, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InvokeMethodReply().from_bytes(data)[0], error_code
     
 
     class NewInstanceRequest(BaseModel):
@@ -1345,9 +1465,11 @@ class ClassTypeSet():
             return self, offset
 
 
-    async def NewInstance(self, request: NewInstanceRequest) -> NewInstanceReply:
-        data, _, _, _ = await self.conn.send_and_recv(3, 4, data=request.to_bytes())
-        return self.NewInstanceReply().from_bytes(data)[0]
+    async def NewInstance(self, request: NewInstanceRequest) -> Tuple[NewInstanceReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(3, 4, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.NewInstanceReply().from_bytes(data)[0], error_code
 
 
 class ArrayTypeSet():
@@ -1365,9 +1487,11 @@ class ArrayTypeSet():
             return b''.join([Jdwp.make_long(self.arrType), Jdwp.make_int(self.length)])
 
 
-    async def NewInstance(self, request: NewInstanceRequest) -> TaggedObjectID:
-        data, _, _, _ = await self.conn.send_and_recv(4, 1, data=request.to_bytes())
-        return TaggedObjectID().from_bytes(data)[0]
+    async def NewInstance(self, request: NewInstanceRequest) -> Tuple[TaggedObjectID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(4, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return TaggedObjectID().from_bytes(data)[0], error_code
 
 
 class InterfaceTypeSet():
@@ -1407,9 +1531,11 @@ class InterfaceTypeSet():
             return self, offset
 
 
-    async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        data, _, _, _ = await self.conn.send_and_recv(5, 1, data=request.to_bytes())
-        return self.InvokeMethodReply().from_bytes(data)[0]
+    async def InvokeMethod(self, request: InvokeMethodRequest) -> Tuple[InvokeMethodReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(5, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InvokeMethodReply().from_bytes(data)[0], error_code
 
 
 class MethodSet():
@@ -1454,10 +1580,12 @@ class MethodSet():
             return self, offset
 
 
-    async def LineTable(self, request: LineTableRequest) -> LineTableReply:
+    async def LineTable(self, request: LineTableRequest) -> Tuple[LineTableReply, int]:
         out = Jdwp.make_long(refType) + Jdwp.make_long(methodID)
-        data, _, _, _ = await self.conn.send_and_recv(6, 1, data=out)
-        return self.LineTableReply().from_bytes(data)[0]
+        data, _, _, error_code = await self.conn.send_and_recv(6, 1, data=out)
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.LineTableReply().from_bytes(data)[0], error_code
     
 
     class VariableTableRequest(BaseModel):
@@ -1488,21 +1616,23 @@ class MethodSet():
 
     class VariableTableReply(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
-        argCnt: Optional[Long] = None
+        argCnt: Optional[Int] = None
         slots: List['VariableTableEntry'] = []
 
         def from_bytes(self, data, offset=0) -> Tuple['VariableTableReply', int]:
             self.argCnt, offset = Jdwp.parse_int(data, offset, Int)
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = VariableTableEntry().from_bytes(data, offset)
-                slots.append(value)
+                value, offset = MethodSet.VariableTableEntry().from_bytes(data, offset)
+                self.slots.append(value)
             return self, offset
 
 
-    async def VariableTable(self, request: VariableTableRequest):
-        data, _, _, _ = await self.conn.send_and_recv(6, 2, data=request.to_bytes())
-        return self.VariableTableReply().from_bytes(data)[0]
+    async def VariableTable(self, request: VariableTableRequest) -> Tuple[VariableTableReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(6, 2, data=request.to_bytes())
+        if error_code != 0:
+            return None, error_code
+        return self.VariableTableReply().from_bytes(data)[0], error_code
 
     
     class BytecodesRequest(BaseModel):
@@ -1526,9 +1656,11 @@ class MethodSet():
             return self, offset
 
 
-    async def Bytecodes(self, request: BytecodesRequest) -> BytecodesReply:
-        data, _, _, _ = await self.conn.send_and_recv(6, 3, data=request.to_bytes())
-        return self.BytecodesReply().from_bytes(data)[0]
+    async def Bytecodes(self, request: BytecodesRequest) -> Tuple[BytecodesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(6, 3, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.BytecodesReply().from_bytes(data)[0], error_code
 
         
     class IsObsoleteRequest(BaseModel):
@@ -1540,9 +1672,11 @@ class MethodSet():
             return b''.join([Jdwp.make_long(self.refType), Jdwp.make_long(self.methodID)])
 
 
-    async def IsObsolete(self, request: IsObsoleteRequest) -> Boolean:
-        data, _, _, _ = await self.conn.send_and_recv(6, 4, data=request.to_bytes())
-        return Jdwp.parse_byte(data, 0, Boolean)[0]
+    async def IsObsolete(self, request: IsObsoleteRequest) -> Tuple[Boolean, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(6, 4, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_byte(data, 0, Boolean)[0], error_code
 
 
     class VariableTableWithGenericRequest(BaseModel):
@@ -1582,14 +1716,16 @@ class MethodSet():
             self.argCnt, offset = Jdwp.parse_int(data, offset, Int)
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = VariableTableWithGenericEntry().from_bytes(data, offset)
+                value, offset = MethodSet.VariableTableWithGenericEntry().from_bytes(data, offset)
                 slots.append(value)
             return self, offset
 
 
-    async def VariableTableWithGeneric(self, request: VariableTableWithGenericRequest) -> VariableTableWithGenericReply:
-        data, _, _, _ = await self.conn.send_and_recv(6, 5, data=request.to_bytes())
-        return self.VariableTableWithGenericReply().from_bytes(data)[0]
+    async def VariableTableWithGeneric(self, request: VariableTableWithGenericRequest) -> Tuple[VariableTableWithGenericReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(6, 5, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.VariableTableWithGenericReply().from_bytes(data)[0], error_code
 
 
 # Note: Empty set in specification.
@@ -1616,9 +1752,11 @@ class ObjectReferenceSet():
             return self, offset
 
 
-    async def ReferenceType(self, objectid: ObjectID):
-        data, _, _, _ = await self.conn.send_and_recv(9, 1, data=Jdwp.make_long(objectid))
-        return self.ReferenceTypeReply().from_bytes(data)[0]
+    async def ReferenceType(self, objectid: ObjectID) -> Tuple[ReferenceTypeReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(9, 1, data=Jdwp.make_long(objectid))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ReferenceTypeReply().from_bytes(data)[0], error_code
 
 
     class GetValuesRequest(BaseModel):
@@ -1627,7 +1765,7 @@ class ObjectReferenceSet():
         fields: List[FieldID] = []
 
         def to_bytes(self) -> bytes:
-            out = [Jdwp.make_long(self.refType), Jdwp.make_int(len(self.fields))]
+            out = [Jdwp.make_long(self.objectid), Jdwp.make_int(len(self.fields))]
             out.extend([Jdwp.make_long(fieldID) for fieldID in self.fields])
             return b''.join(out)
 
@@ -1644,9 +1782,11 @@ class ObjectReferenceSet():
             return self, offset
 
     
-    async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        data, _, _, _ = await self.conn.send_and_recv(9, 2, data=request.to_bytes())
-        return self.GetValuesReply().from_bytes(data)[0]
+    async def GetValues(self, request: GetValuesRequest) -> Tuple[GetValuesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(9, 2, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.GetValuesReply().from_bytes(data)[0], error_code
 
 
 
@@ -1697,8 +1837,10 @@ class ObjectReferenceSet():
 
 
     async def MonitorInfo(self, objectid: ObjectID) -> MonitorInfoReply:
-        data, _, _, _ = await self.conn.send_and_recv(9, 5, data=Jdwp.make_long(objectid))
-        return self.MonitorInfoReply().from_bytes(data)[0]
+        data, _, _, error_code = await self.conn.send_and_recv(9, 5, data=Jdwp.make_long(objectid))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.MonitorInfoReply().from_bytes(data)[0], error_code
 
 
     class InvokeMethodRequest(BaseModel):
@@ -1734,9 +1876,11 @@ class ObjectReferenceSet():
             return self, offset
 
 
-    async def InvokeMethod(self, request: InvokeMethodRequest) -> InvokeMethodReply:
-        data, _, _, _ = await self.conn.send_and_recv(9, 6, data=request.to_bytes())
-        return self.InvokeMethodReply().from_bytes(data)[0]
+    async def InvokeMethod(self, request: InvokeMethodRequest) -> Tuple[InvokeMethodReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(9, 6, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.InvokeMethodReply().from_bytes(data)[0], error_code
 
     
     async def DisableCollection(self, objectid: ObjectID):
@@ -1747,9 +1891,11 @@ class ObjectReferenceSet():
         await self.conn.send(9, 8, data=Jdwp.make_long(objectid))
         
     
-    async def IsCollected(self, objectid: ObjectID) -> Boolean:
-        data, _, _, _ = await self.conn.send_and_recv(9, 9, data=Jdwp.make_long(objectid))
-        return Jdwp.parse_byte(data, 0, Boolean)[0]
+    async def IsCollected(self, objectid: ObjectID) -> Tuple[Boolean, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(9, 9, data=Jdwp.make_long(objectid))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_byte(data, 0, Boolean)[0], error_code
 
 
     class ReferringObjectsRequest(BaseModel):
@@ -1773,9 +1919,11 @@ class ObjectReferenceSet():
             return self, offset
 
     
-    async def ReferringObjects(self, request: ReferringObjectsRequest) -> ReferringObjectsReply:
-        data, _, _, _ = await self.conn.send_and_recv(9, 10, data=request.to_bytes())
-        return self.ReferringObjectsReply().from_bytes(data)[0]
+    async def ReferringObjects(self, request: ReferringObjectsRequest) -> Tuple[ReferringObjectsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(9, 10, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ReferringObjectsReply().from_bytes(data)[0], error_code
 
 
 class StringReferenceSet():
@@ -1783,9 +1931,11 @@ class StringReferenceSet():
     def __init__(self, conn):
         self.conn = conn
 
-    async def IsCollected(self, stringObject: ObjectID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(10, 1, data=Jdwp.make_long(stringObject))
-        return Jdwp.parse_string(data, 0, String)[0]
+    async def IsCollected(self, stringObject: ObjectID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(10, 1, data=Jdwp.make_long(stringObject))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, 0, String)[0], error_code
 
 
 class ThreadReferenceSet():
@@ -1793,9 +1943,11 @@ class ThreadReferenceSet():
     def __init__(self, conn):
         self.conn = conn
 
-    async def Name(self, thread: ThreadID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(11, 1, data=Jdwp.make_long(thread))
-        return Jdwp.parse_string(data, 0, String)[0]
+    async def Name(self, thread: ThreadID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 1, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, 0, String)[0], error_code
     
 
     async def Suspend(self, thread: ThreadID) -> None:
@@ -1817,14 +1969,18 @@ class ThreadReferenceSet():
             return self, offset
 
 
-    async def Status(self, thread: ThreadID) -> StatusReply:
-        data, _, _, _ = await self.conn.send_and_recv(11, 4, data=Jdwp.make_long(thread))
-        return self.StatusReply().from_bytes(data)[0]
+    async def Status(self, thread: ThreadID) -> Tuple[StatusReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 4, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.StatusReply().from_bytes(data)[0], error_code
     
 
-    async def ThreadGroup(self, thread: ThreadID) -> ThreadGroupID:
-        data, _, _, _ = await self.conn.send_and_recv(11, 5, data=Jdwp.make_long(thread))
-        return Jdwp.parse_long(data, 0, ThreadGroupID)[0]
+    async def ThreadGroup(self, thread: ThreadID) -> Tuple[ThreadGroupID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 5, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, 0, ThreadGroupID)[0], error_code
 
 
     class FramesRequest(BaseModel):
@@ -1864,14 +2020,18 @@ class ThreadReferenceSet():
             return self, offset
     
 
-    async def Frames(self, request: FramesRequest) -> FramesReply:
-        data, _, _, _ = await self.conn.send_and_recv(11, 6, data=request.to_bytes())
-        return self.FramesReply().from_bytes(data)[0]
+    async def Frames(self, request: FramesRequest) -> Tuple[FramesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 6, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.FramesReply().from_bytes(data)[0], error_code
     
 
-    async def FrameCount(self, thread: ThreadID) -> Int:
-        data, _, _, _ = await self.conn.send_and_recv(11, 7, data=Jdwp.make_long(thread))
-        return Jdwp.parse_int(data, 0, Int)[0]
+    async def FrameCount(self, thread: ThreadID) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 7, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, 0, Int)[0], error_code
     
 
     class OwnedMonitorsReply(BaseModel):
@@ -1886,14 +2046,18 @@ class ThreadReferenceSet():
             return self, offset
 
 
-    async def OwnedMonitors(self, thread: ThreadID) -> OwnedMonitorsReply:
-        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
-        return self.OwnedMonitorsReply().from_bytes(data)[0]
+    async def OwnedMonitors(self, thread: ThreadID) -> Tuple[OwnedMonitorsReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.OwnedMonitorsReply().from_bytes(data)[0], error_code
 
     
-    async def CurrentContendedMonitor(self, thread: ThreadID) -> TaggedObjectID:
-        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
-        return TaggedObjectID().from_bytes(data)[0]
+    async def CurrentContendedMonitor(self, thread: ThreadID) -> Tuple[TaggedObjectID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return TaggedObjectID().from_bytes(data)[0], error_code
 
 
     class StopRequest(BaseModel):
@@ -1916,9 +2080,11 @@ class ThreadReferenceSet():
         await self.conn.send(11, 11, data=Jdwp.make_long(thread))
 
 
-    async def SuspendCount(self, thread: ThreadID) -> Int:
-        data, _, _, _ = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
-        return Jdwp.parse_int(data, 0, Int)[0]
+    async def SuspendCount(self, thread: ThreadID) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 8, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, 0, Int)[0], error_code
 
 
     class OwnedMonitorsStackDepthInfoEntry(BaseModel):
@@ -1939,14 +2105,16 @@ class ThreadReferenceSet():
         def from_bytes(self, data, offset=0) -> Tuple['OwnedMonitorsStackDepthInfoReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = OwnedMonitorsStackDepthInfoEntry().from_bytes(data, offset)
+                value, offset = ThreadReferenceSet.OwnedMonitorsStackDepthInfoEntry().from_bytes(data, offset)
                 self.owned = [*self.owned, value]
             return self, offset
 
     
-    async def OwnedMonitorsStackDepthInfo(self, thread: ThreadID) -> OwnedMonitorsStackDepthInfoReply:
-        data, _, _, _ = await self.conn.send_and_recv(11, 13, data=Jdwp.make_long(thread))
-        return self.OwnedMonitorsStackDepthInfoReply().from_bytes(data)[0]
+    async def OwnedMonitorsStackDepthInfo(self, thread: ThreadID) -> Tuple[OwnedMonitorsStackDepthInfoReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(11, 13, data=Jdwp.make_long(thread))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.OwnedMonitorsStackDepthInfoReply().from_bytes(data)[0], error_code
     
 
     class ForceEarlyReturnRequest(BaseModel):
@@ -1968,14 +2136,18 @@ class ThreadGroupReferenceSet():
         self.conn = conn
 
 
-    async def Name(self, group: ThreadGroupID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(12, 1, data=Jdwp.make_long(group))
-        return Jdwp.parse_string(data, offset, String)[0]
+    async def Name(self, group: ThreadGroupID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(12, 1, data=Jdwp.make_long(group))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_string(data, offset, String)[0], error_code
 
     
-    async def Parent(self, group: ThreadGroupID) -> String:
-        data, _, _, _ = await self.conn.send_and_recv(12, 2, data=Jdwp.make_long(group))
-        return Jdwp.parse_long(data, offset, ThreadGroupID)[0]
+    async def Parent(self, group: ThreadGroupID) -> Tuple[String, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(12, 2, data=Jdwp.make_long(group))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_long(data, offset, ThreadGroupID)[0], error_code
 
 
     class ChildrenReply(BaseModel):
@@ -1996,9 +2168,11 @@ class ThreadGroupReferenceSet():
             return self, offset
 
     
-    async def Children(self, group: ThreadGroupID) -> ChildrenReply:
-        data, _, _, _ = await self.conn.send_and_recv(12, 3, data=Jdwp.make_long(group))
-        return self.ChildrenReply().from_bytes(data)[0]
+    async def Children(self, group: ThreadGroupID) -> Tuple[ChildrenReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(12, 3, data=Jdwp.make_long(group))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ChildrenReply().from_bytes(data)[0], error_code
     
 
 class ArrayReferenceSet():
@@ -2007,9 +2181,11 @@ class ArrayReferenceSet():
         self.conn = conn
     
 
-    async def Length(self, arrayObject: ArrayID) -> Int:
-        data, _, _, _ = await self.conn.send_and_recv(13, 1, data=Jdwp.make_long(arrayObject))
-        return Jdwp.parse_int(data, offset, Int)[0]
+    async def Length(self, arrayObject: ArrayID) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(13, 1, data=Jdwp.make_long(arrayObject))
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, offset, Int)[0], error_code
 
 
     class GetValuesRequest(BaseModel):
@@ -2026,9 +2202,11 @@ class ArrayReferenceSet():
             ])
 
 
-    async def GetValues(self, request: GetValuesRequest) -> ArrayRegion:
-        data, _, _, _ = await self.conn.send_and_recv(13, 2, data=request.to_bytes())
-        return self.ArrayRegion().from_bytes(data)[0]
+    async def GetValues(self, request: GetValuesRequest) -> Tuple[ArrayRegion, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(13, 2, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ArrayRegion().from_bytes(data)[0], error_code
 
 
     # !! Need To Implement Untagged Values
@@ -2074,14 +2252,16 @@ class ClassLoaderReferenceSet():
         def from_bytes(self, data, offset=0) -> Tuple['ChildrenReply', int]:
             count, offset = Jdwp.parse_int(data, offset)
             for _ in range(count):
-                value, offset = VisibleClassesEntry().from_bytes(data, offset)
+                value, offset = ClassLoaderReferenceSet.VisibleClassesEntry().from_bytes(data, offset)
                 self.classes = [*self.classes, value]
             return self, offset
 
 
-    async def VisibleClasses(self, classLoaderObject: ClassLoaderID) -> VisibleClassesReply:
-        data, _, _, _ = await self.conn.send_and_recv(14, 1, data=request.to_bytes())
-        return self.VisibleClassesReply().from_bytes(data)[0]
+    async def VisibleClasses(self, classLoaderObject: ClassLoaderID) -> Tuple[VisibleClassesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(14, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.VisibleClassesReply().from_bytes(data)[0], error_code
 
 
 class EventRequestSet():
@@ -2090,8 +2270,7 @@ class EventRequestSet():
         self.conn = conn
 
 
-
-    class SetCountModifier: #1
+    class SetCountModifier(BaseModel): #1
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(1)
         count: Optional[Int] = None
@@ -2102,7 +2281,8 @@ class EventRequestSet():
                 Jdwp.make_int(self.count),
             ])
 
-    class SetConditionalModifier: #2
+
+    class SetConditionalModifier(BaseModel): #2
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(2)
         exprID: Optional[Int] = None
@@ -2113,7 +2293,8 @@ class EventRequestSet():
                 Jdwp.make_int(self.exprID),
             ])
     
-    class SetThreadOnlyModifier: #3
+
+    class SetThreadOnlyModifier(BaseModel): #3
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(3)
         thread: Optional[ThreadID] = None
@@ -2125,7 +2306,7 @@ class EventRequestSet():
             ])
 
 
-    class SetClassOnlyModifier: #4
+    class SetClassOnlyModifier(BaseModel): #4
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(4)
         clazz: Optional[ReferenceTypeID] = None
@@ -2136,7 +2317,8 @@ class EventRequestSet():
                 Jdwp.make_long(self.clazz),
             ])
     
-    class SetClassMatchModifier: #5
+
+    class SetClassMatchModifier(BaseModel): #5
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(5)
         classPattern: Optional[String] = None
@@ -2147,7 +2329,8 @@ class EventRequestSet():
                 Jdwp.make_string(self.classPattern),
             ])
     
-    class SetClassExcludeModifier: #6
+
+    class SetClassExcludeModifier(BaseModel): #6
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(6)
         classPattern: Optional[String] = None
@@ -2158,7 +2341,8 @@ class EventRequestSet():
                 Jdwp.make_string(self.classPattern),
             ])
     
-    class SetLocationOnlyModifier: #7
+
+    class SetLocationOnlyModifier(BaseModel): #7
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(7)
         loc: Optional[Location] = None
@@ -2169,7 +2353,8 @@ class EventRequestSet():
                 self.loc.to_bytes(),
             ])
 
-    class SetExceptionOnlyModifier: #8
+
+    class SetExceptionOnlyModifier(BaseModel): #8
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(8)
         exceptionOrNull: Optional[ReferenceTypeID] = None
@@ -2184,7 +2369,8 @@ class EventRequestSet():
                 Jdwp.make_byte(self.uncaught),
             ])
         
-    class SetFieldOnlyModifier: #9
+
+    class SetFieldOnlyModifier(BaseModel): #9
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(9)
         declaring: Optional[ReferenceTypeID] = None
@@ -2197,7 +2383,8 @@ class EventRequestSet():
                 Jdwp.make_long(self.fieldID),
             ])
 
-    class SetStepModifier: #10
+
+    class SetStepModifier(BaseModel): #10
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(10)
         thread: Optional[ThreadID] = None
@@ -2212,7 +2399,8 @@ class EventRequestSet():
                 Jdwp.make_int(self.depth),
             ])
     
-    class SetInstanceOnlyModifier: #11
+
+    class SetInstanceOnlyModifier(BaseModel): #11
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(11)
         instance: Optional[ObjectID] = None
@@ -2223,7 +2411,8 @@ class EventRequestSet():
                 Jdwp.make_long(self.instance),
             ])
     
-    class SetSourceNameMatchModifier: #12
+
+    class SetSourceNameMatchModifier(BaseModel): #12
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(12)
         sourceNamePattern: Optional[String] = None
@@ -2234,12 +2423,14 @@ class EventRequestSet():
                 Jdwp.make_string(self.sourceNamePattern),
             ])
     
-    class SetPlatformThreadsOnlyModifier: #13
+
+    class SetPlatformThreadsOnlyModifier(BaseModel): #13
         model_config = ConfigDict(validate_assignment=True)
         modKind: Optional[Int] = Int(13)
 
         def to_bytes(self) -> bytes:
             return Jdwp.make_byte(self.modKind)
+
 
     SetModifier = {
         1: SetCountModifier,
@@ -2256,6 +2447,7 @@ class EventRequestSet():
         12: SetSourceNameMatchModifier,
         13: SetPlatformThreadsOnlyModifier,
     }
+
 
     # !! This is really sophisticated. Coming back later.
     class SetRequest(BaseModel):
@@ -2278,9 +2470,12 @@ class EventRequestSet():
                 out.append(modifier.to_bytes())
             return b''.join(out)
     
-    async def Set(self, request: SetRequest) -> Int:
-        data, _, _, _ = await self.conn.send_and_recv(15, 1, data=request.to_bytes())
-        return Jdwp.parse_int(data, 0)[0]
+
+    async def Set(self, request: SetRequest) -> Tuple[Int, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(15, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return Jdwp.parse_int(data, 0)[0], error_code
 
 
     class ClearRequest(BaseModel):
@@ -2291,6 +2486,7 @@ class EventRequestSet():
         def to_bytes(self) -> bytes:
             return b''.join([Jdwp.make_byte(self.eventKind), Jdwp.make_int(self.requestID)])
     
+
     async def Clear(self, request: ClearRequest) -> None:
         await self.conn.send(15, 2, data=request.to_bytes())
     
@@ -2326,7 +2522,7 @@ class StackFrameSet():
                 Jdwp.make_long(self.frame),
                 Jdwp.make_int(len(self.slots))
             ]
-            out.extend([value.to_bytes() for slot in self.slots])
+            out.extend([slot.to_bytes() for slot in self.slots])
             return b''.join(out)
 
 
@@ -2342,9 +2538,11 @@ class StackFrameSet():
             return self, offset
 
     
-    async def GetValues(self, request: GetValuesRequest) -> GetValuesReply:
-        data, _, _, _ = await self.conn.send_and_recv(16, 1, data=request.to_bytes())
-        return self.GetValuesReply().from_bytes(data)[0]
+    async def GetValues(self, request: GetValuesRequest) -> Tuple[GetValuesReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(16, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.GetValuesReply().from_bytes(data)[0], error_code
 
 
     class SetValuesSlotEntry(BaseModel):
@@ -2385,9 +2583,11 @@ class StackFrameSet():
             return b''.join([Jdwp.make_long(self.thread), Jdwp.make_long(self.frame)])
 
     
-    async def ThisObject(self, request: ThisObjectRequest) -> TaggedObjectID:
-        data, _, _, _ = await self.conn.send_and_recv(16, 3, data=request.to_bytes())
-        return TaggedObjectID().from_bytes(data)[0]
+    async def ThisObject(self, request: ThisObjectRequest) -> Tuple[TaggedObjectID, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(16, 3, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return TaggedObjectID().from_bytes(data)[0], error_code
 
 
     class PopFramesRequest(BaseModel):
@@ -2420,15 +2620,18 @@ class ClassObjectReferenceSet():
             return self, offset
 
     
-    async def ReflectedType(self, classObject: ClassObjectID) -> ReflectedTypeReply:
-        data, _, _, _ = await self.conn.send_and_recv(17, 1, data=request.to_bytes())
-        return self.ReflectedTypeReply().from_bytes(data)[0]
+    async def ReflectedType(self, classObject: ClassObjectID) -> Tuple[ReflectedTypeReply, int]:
+        data, _, _, error_code = await self.conn.send_and_recv(17, 1, data=request.to_bytes())
+        if error_code != Jdwp.Error.NONE:
+            return None, error_code
+        return self.ReflectedTypeReply().from_bytes(data)[0], error_code
 
 
 class EventSet():
 
     def __init__(self, conn):
         self.conn = conn
+
 
     class EventVMStart(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
@@ -2455,6 +2658,7 @@ class EventSet():
             self.location, offset = Location().from_bytes(data, offset)
             return self, offset
 
+
     class EventBreakpoint(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.BREAKPOINT)
@@ -2468,6 +2672,7 @@ class EventSet():
             self.location, offset = Location().from_bytes(data, offset)
             return self, offset
 
+
     class EventMethodEntry(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.METHOD_ENTRY)
@@ -2480,6 +2685,7 @@ class EventSet():
             self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
             self.location, offset = Location().from_bytes(data, offset)
             return self, offset
+
 
     class EventMethodExit(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
@@ -2510,6 +2716,7 @@ class EventSet():
             self.value, offset = Value().from_bytes(data, offset)
             return self, offset
     
+
     class EventMonitorContendedEnter(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.MONITOR_CONTENDED_ENTER)
@@ -2525,6 +2732,7 @@ class EventSet():
             self.location, offset = Location().from_bytes(data, offset)
             return self, offset
         
+
     class EventMonitorContendedEntered(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.MONITOR_CONTENDED_ENTERED)
@@ -2540,6 +2748,7 @@ class EventSet():
             self.location, offset = Location().from_bytes(data, offset)
             return self, offset
     
+
     class EventMonitorWait(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.MONITOR_WAIT)
@@ -2549,6 +2758,7 @@ class EventSet():
         location: Optional[Location] = None
         timeout: Optional[Long] = None
 
+
         def from_bytes(self, data, offset=0) -> Tuple['EventMonitorWait', int]:
             self.requestID, offset = Jdwp.parse_int(data, offset, Int)
             self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
@@ -2557,6 +2767,7 @@ class EventSet():
             self.timeout, offset = Jdwp.parse_long(data, offset, Long)
             return self, offset
     
+
     class EventMonitorWaited(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.MONITOR_WAITED)
@@ -2573,6 +2784,7 @@ class EventSet():
             self.location, offset = Location().from_bytes(data, offset)
             self.timed_out, offset = Jdwp.parse_byte(data, offset, Boolean)
             return self, offset
+
 
     class EventException(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
@@ -2591,6 +2803,7 @@ class EventSet():
             self.catchLocation, offset = Location().from_bytes(data, offset)
             return self, offset
 
+
     class EventThreadStart(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.THREAD_START)
@@ -2602,6 +2815,7 @@ class EventSet():
             self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
             return self, offset
 
+
     class EventThreadDeath(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.THREAD_DEATH)
@@ -2612,6 +2826,7 @@ class EventSet():
             self.requestID, offset = Jdwp.parse_int(data, offset, Int)
             self.thread, offset = Jdwp.parse_long(data, offset, ThreadID)
             return self, offset
+
 
     class EventClassPrepare(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
@@ -2632,6 +2847,7 @@ class EventSet():
             self.status, offset = Jdwp.parse_int(data, offset, Int)
             return self, offset
         
+
     class EventClassUnload(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.CLASS_UNLOAD)
@@ -2642,6 +2858,7 @@ class EventSet():
             self.requestID, offset = Jdwp.parse_int(data, offset, Int)
             self.signature, offet = Jdwp.parse_string(data, offset, String)
             return self, offset
+
 
     class EventFieldAccess(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
@@ -2664,6 +2881,7 @@ class EventSet():
             self.objectID, offset = TaggedObjectID().from_bytes(data, offset)
             return self, offset
     
+
     class EventFieldModification(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         eventKind: Optional[Byte] = Byte(EventKind.FIELD_MODIFICATION)
@@ -2697,6 +2915,7 @@ class EventSet():
             self.requestID, offset = Jdwp.parse_int(data, offset, Int)
             return self, offset
 
+
     Events = {
         EventKind.VM_START: EventVMStart,
         EventKind.SINGLE_STEP: EventSingleStep,
@@ -2722,6 +2941,7 @@ class EventSet():
         EventKind.VM_DEATH: EventVMDeath,
     }
 
+
     class CompositeCommand(BaseModel):
         model_config = ConfigDict(validate_assignment=True)
         suspendPolicy: Optional[Byte] = None
@@ -2742,10 +2962,5 @@ class EventSet():
                 evt, offset = EventSet.Events[eventKind]().from_bytes(data, offset)
                 self.events.append(evt)
             return self, offset
-
-
-'''
-The following classes are for runtime usage, not for serialization or parsing like the above classes.
-'''
 
 
