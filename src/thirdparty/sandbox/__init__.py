@@ -125,6 +125,267 @@ async def start_socket_client(socket_path: str=None, host: str=None, port: int=N
         pass
 
 
+async def start_socket_client(socket_path: str=None, host: str=None, port: int=None):
+    try:
+        reader = None
+        writer = None
+        if socket_path:
+            reader, writer = await asyncio.open_unix_connection(socket_path)
+        else:
+            reader, writer = await asyncio.open_connection(host, port)
+        
+        print(f"Connected to {host}:{port}")
+
+        async def read_from_server():
+            while True:
+                data = await reader.read(1024)
+                if not data:
+                    print("Server closed connection")
+                    break
+                sys.stdout.write(data.decode())
+                sys.stdout.flush()
+
+        async def write_to_server():
+            loop = asyncio.get_event_loop()
+            while True:
+                # Read user input asynchronously
+                line = await loop.run_in_executor(None, input)
+                writer.write((line + '\r\n').encode())
+                await writer.drain()
+
+        # Run reading and writing concurrently
+        await asyncio.gather(read_from_server(), write_to_server())
+    except ConnectionResetError:
+        print("\nClient disconnected")
+        pass
+
+
+class ExitReplException(Exception):
+    pass
+
+'''
+This has become kind of a get nothing day. To start, I was really hoping
+to find a clean way to use await from pdb to make my life simple. This
+ended up not being the case.
+
+In short, python runs a main thread when you fire it up. If you chose to
+do something like asyncio.run(main()), it starts an event loop in that
+thread. If any one of the coroutines or tasks in the event loop use a
+blocking API (input, read, etc), it'll block the whole loop from running.
+
+This creates a very tricky situation for REPLs like code.interact() and
+pdb.set_trace(). Both of these interfaces use some blocking API like
+sys.stdin.read(). This means that even if you are able to successfully
+schedule a task to run in the event loop of the local thread, it wont
+actually get to execute because the REPL itself will be blocking the event
+loop from running.
+
+One nasty solution is to implement our own CLI handling. In our handler,
+we use select to check if there is data to read from STDIN file descriptor.
+If there is data, we can read that data from the FD. Note: The FD, for
+weird reasons should also be non-blocking. You can than capture the data
+1 read at a time and then break out of your read loop when there is no more
+data. When select() returns nothing to read, you should:
+await asyncio.sleep(0) to keep the event loop executing. Without this you'll
+never see anything from the server.
+
+Note: prompt-toolkit doesn't seem to be able to do the above process. The
+reason its important is because we need to detect paste events int the
+terminal and split it based on line. The issue is that we currenly depend
+on the server's code.interact() to determine if the next line is a >>>
+or a '...'. This means that to cleanly implement this interface, we'll
+need to do more of a linear command and response instead of the async
+read and write from/to the server the whole team. The impact of this is
+that we'll not get things that have happened on the server, but it also
+fixes the issue where we'd get a mixed up set of characters on the screen
+if we're reading from the server while typing a command. Meh.
+
+At this point I think I need to rethink the various use cases here. There
+is the simple socket use case that doesn't require anything fancy. It should
+probably be refactored into a command/response design pattern similar to
+our more complicated raw tty version. The raw tty version should be more
+capable with command line history and multiline pasting, but also be 
+a command/response design pattern so that the prompt is aligned from line
+to line whether we're pasting or not.
+
+Now, if we do want to have the server sending us lines while we're typing
+our commands, this can be done with textual. In this case, we'd have
+the server responses put into a scrollable view with statics inserted just
+above where we dial in our commands. The weirdness here is that our command
+will be boxed into a scrollable itself instead of being spread across the
+screen. Meh.
+'''
+
+async def start_raw_tty_repl_client(socket_path: str = None, host: str = None, port: int = None):
+    import termios
+    import tty
+    import select
+    import sys, os, fcntl
+    try:
+        reader = None
+        writer = None
+        if socket_path:
+            reader, writer = await asyncio.open_unix_connection(socket_path)
+        else:
+            reader, writer = await asyncio.open_connection(host, port)
+
+        print(f"Connected to {host}:{port}")
+
+
+        async def read_available():
+            chunks = []
+            while True and len(chunks) == 0:
+                try:
+                    # Try reading a small chunk with timeout=0 to avoid blocking
+                    chunk = await asyncio.wait_for(reader.read(1024), timeout=0.01)
+                    if not chunk:  # EOF
+                        break
+                    chunks.append(chunk)
+                except asyncio.TimeoutError:
+                    # No more data available right now
+                    break
+            sys.stdout.write(b"".join(chunks).decode().replace('\n', '\r\n'))
+            sys.stdout.flush()
+
+
+        async def write_to_server():
+            fd = sys.stdin.fileno()
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            old_settings = termios.tcgetattr(fd)
+            
+            try:
+                tty.setraw(fd)  # Put terminal in raw mode
+                while True:
+
+                    line = []
+                    new_line = False
+                    
+                    while True:
+                        rlist, _, _ = select.select([fd], [], [], 0)
+                        if rlist:
+                            data = os.read(fd, 2048)                          
+
+                            # if not data:
+                            #     return  # nothing to read
+                            #print(data)
+
+                            if data in (b'\x04'): # Ctrl-D
+                                raise ExitReplException()
+                            
+                            if data in (b'\x08', b'\x7f'): # Backspace
+                                if line:
+                                    line.pop()                                    
+                                    sys.stdout.write('\b \b')
+                                    sys.stdout.flush()
+                                continue
+
+                            elif data.startswith(b'\x1b'):
+                                raise ExitReplException()
+                                #handle_escape_sequence(data)
+                                # b'\x1b[A' is UP
+
+                            elif data in (b'\r', b'\n'): # Enter
+                                user_input = b''.join(line) + b'\r\n'
+                                line = []
+                                sys.stdout.write('\r\n')
+                                sys.stdout.flush()
+
+                                writer.write(user_input)
+                                await writer.drain()
+                                await read_available()
+
+                            elif b'\n' in data or len(data) > 1:
+                                #handle_paste(data)
+                                print("PASTE DETECTED")
+                                # TODO: Based on the provided input,
+                                # read each line
+                                continue
+                            
+                            else:
+                                #handle_typing(data)
+                                line.append(data)
+                                sys.stdout.write(data.decode())
+                                sys.stdout.flush()
+
+
+
+                            # # Detect escape sequences
+                            # if data.startswith(b'\x1b'):
+                            #     handle_escape_sequence(data)
+                            # # Detect typed Enter (single newline, not part of paste)
+                            # elif data in (b'\r', b'\n'):
+                            #     handle_enter()
+                            # # Detect paste (multiple bytes or multiple newlines)
+                            # elif b'\n' in data or len(data) > 1:
+                            #     handle_paste(data)
+                            # # Normal characters
+                            # else:
+                            #     handle_typing(data)
+
+
+                            # if ch == b'\x04': # Ctrl-D
+                            #     raise ExitReplException()
+
+                            # if ch == b'\x1b': # Escape Sequence
+                            #     # TODO: Handle escape?
+                            #     seq = ch + os.read(fd, 2)
+                            #     if seq == b'\x1b[A':
+                            #         print("UP")
+                            #         line = []
+                            #         break
+                                    
+                            # if ch in (b"\r", b"\n"):  # End-of-line
+                            #     new_line = True
+                            #     sys.stdout.write("\r\n")
+                            #     sys.stdout.flush()
+                            #     break
+
+                            # if ch in (b'\x08', b'\x7f'): # Backspace
+                            #     if line:
+                            #         line.pop()                                    
+                            #         sys.stdout.write('\b \b')
+                            #         sys.stdout.flush()
+                            #     continue
+
+                            # line.append(ch)
+                            # sys.stdout.write(ch.decode())
+                            # sys.stdout.flush()
+                        else:
+                            await asyncio.sleep(0)
+                
+                    # if new_line:
+                    #     new_line = False
+                    #     user_input = b''.join(line)
+                    #     writer.write(user_input + b'\r\n')
+                    #     await writer.drain()
+                    #     await read_available()
+    
+            except ExitReplException:
+                sys.exit(0)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        await read_available()
+        await write_to_server()
+        
+
+    except ConnectionResetError:
+        print("\nClient disconnected")
+        pass
+    except SystemExit:
+        pass
+
+
+
+def other():
+    print("wert")
+    print("third")
+
+
+
+
+
 async def handle_repl_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, namespace):
     try:
         console = code.InteractiveConsole(namespace)
@@ -138,13 +399,16 @@ async def handle_repl_client(reader: asyncio.StreamReader, writer: asyncio.Strea
             line_bytes = await reader.readline()
             if not line_bytes:
                 break  # client disconnected
-            line = line_bytes.decode()
 
+            line = line_bytes.decode()
+            #print(line)
+            
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 more = console.push(line)
 
             captured = output.getvalue()
+            #print(captured.encode())
             if captured:
                 writer.write(captured.encode())
 
@@ -157,6 +421,38 @@ async def handle_repl_client(reader: asyncio.StreamReader, writer: asyncio.Strea
         await writer.wait_closed()
     except Exception as e:
         print(f"Exception: {e}")
+
+
+
+
+# data = os.read(fd, 1024)
+
+# if not data:
+#     return  # nothing to read
+
+# # Detect escape sequences
+# if data.startswith(b'\x1b'):
+#     handle_escape_sequence(data)
+# # Detect typed Enter (single newline, not part of paste)
+# elif data in (b'\r', b'\n'):
+#     handle_enter()
+# # Detect paste (multiple bytes or multiple newlines)
+# elif b'\n' in data or len(data) > 1:
+#     handle_paste(data)
+# # Normal characters
+# else:
+#     handle_typing(data)
+
+
+
+
+
+
+
+
+
+
+
 
 
 '''

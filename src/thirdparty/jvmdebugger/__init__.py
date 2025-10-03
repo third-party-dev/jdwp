@@ -5,11 +5,13 @@ from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
 
 import thirdparty.sandbox as __sandbox__
-import nest_asyncio
+#import nest_asyncio
 import typing
 
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
+
+import code
 
 
 
@@ -17,14 +19,85 @@ from typing import Optional, List, Tuple
 # Utility imports
 import multiprocessing
 import pdb
+import threading
 from fuzzyfinder import fuzzyfinder
 from pprint import pprint
+
+
+# class ContextThread(threading.Thread):
+#     def __init__(self, func, frame):
+#         super().__init__()
+#         self.func = func
+#         self.frame = frame
+#         self.result = None
+#         self.exc = None
+
+#     def run(self):
+#         try:
+#             # Pass locals and globals to func
+#             locals_copy = dict(self.frame.f_locals)
+#             globals_copy = self.frame.f_globals
+#             # Call func with access to frame locals/globals
+#             self.result = self.func(locals_copy, globals_copy)
+#         except Exception as e:
+#             self.exc = e
+
+
+
+
+
+# class MyPdb(pdb.Pdb):
+#     # def __init__(self, *args, **kwargs):
+#     #     super().__init__(*args, **kwargs)
+
+#     def do_runthread(self, arg):
+#         frame = self.curframe
+#         if arg not in frame.f_locals:
+#             print(f"No function named '{arg}' in locals")
+#             return
+#         func = frame.f_locals[arg]
+
+#         def wrapper(locals_, globals_):
+#             # Example: access x and y from frame locals
+#             x = locals_.get('x', 0)
+#             y = locals_.get('y', 0)
+#             print(f"In thread: x + y = {x + y}")
+#             return x + y
+
+#         thread = ContextThread(wrapper, frame)
+#         thread.start()
+#         print("Thread started; it has access to frame locals")
+#         thread.join()  # Optional: block until done
+#         if thread.exc:
+#             print("Thread raised:", thread.exc)
+#         else:
+#             print("Thread result:", thread.result)
+
+#     async def working_await(self):
+#         print("It worked.")
+
+
+#     def do_await(self, arg):
+#         self.pending_coro = self.curframe.f_locals[arg]
+#         self.pending_future = asyncio.run_coroutine_threadsafe(self.working_await(coro), self.event_loop)
+#         while not self.pending_future.done():
+#             self.do_continue()
+#             print(self.pending_future.result())
+#             self.set_trace()
+
+
+#         #print("-----")
+#         #pprint(frame.f_globals)
+
+#     def help_await(self):
+#         print("await <arg> - does something special")
 
 
 class JvmDebugger():
     #threads_by_id = {}
 
     def __init__(self, state=None):
+        #self.pdb = MyPdb()
         if state:
             self.state = state
         else:
@@ -40,8 +113,15 @@ class JvmDebugger():
         # TODO: Consider the event handlers. We won't automatically hot reload them.
 
 
+    # async def set_trace(self):
+    #     import sys
+    #     # Note: This call blocks.
+    #     self.pdb.set_trace(sys._getframe().f_back)
+
+
     async def start(self, host, port):
-        nest_asyncio.apply()
+        #nest_asyncio.apply()
+        #self.pdb.event_loop = asyncio.get_running_loop()
 
         # TODO: unwind this with JdmDebuggerState
         if self.state.jdwp is None:
@@ -296,15 +376,20 @@ class JvmDebugger():
             def return_awaited_value(coroutine: asyncio.coroutines) -> typing.Any:
   
                 loop = asyncio.get_event_loop()
-                result = loop.run_until_complete(coroutine)
-                return result
+                fut = asyncio.run_coroutine_threadsafe(coroutine, loop)
+                #result = loop.run_until_complete(coroutine)
+                return fut.result()
 
             # TODO: Develop a simple CLI for inspecting objects.
             loop1 = asyncio.get_running_loop()
             loop2 = asyncio.get_event_loop()
             coro = dbg.cli_frame_count(event.thread)
-            #fut = asyncio.run_coroutine_threadsafe(coro, loop)
-            breakpoint()
+            # dbg.event_loop.call_soon_threadsafe(asyncio.create_task, coro)
+            # 
+            #fut = asyncio.run_coroutine_threadsafe(coro, dbg.event_loop)
+            print("Sleeping.")
+            await asyncio.sleep(1000)
+            #code.interact(local=locals())
 
 
 
