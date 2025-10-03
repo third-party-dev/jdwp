@@ -5,9 +5,14 @@ from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
 
 import thirdparty.sandbox as __sandbox__
+import nest_asyncio
+import typing
 
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
+
+
+
 
 # Utility imports
 import multiprocessing
@@ -36,6 +41,8 @@ class JvmDebugger():
 
 
     async def start(self, host, port):
+        nest_asyncio.apply()
+
         # TODO: unwind this with JdmDebuggerState
         if self.state.jdwp is None:
             self.state.jdwp = Jdwp(host, port)
@@ -182,6 +189,14 @@ class JvmDebugger():
                     #print(f"CLASS({classID}) FIELD: {entry}")
                 classInfo.fields_loaded = True
 
+    #asyncio.run_coroutine_threadsafe(dbg.cli_frame_count(26097), asyncio.get_event_loop()).result()
+    #asyncio.run_coroutine_threadsafe(dbg.cli_frame_count(26094), dbg.loop)
+    async def cli_frame_count(self, thread_id: int):
+        frame_count, error_code = await self.jdwp.ThreadReference.FrameCount(ThreadID(thread_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        print(frame_count)
+
 
     @staticmethod
     async def handle_step_event(event, composite, args):
@@ -278,9 +293,17 @@ class JvmDebugger():
                     #for declared in fields_reply.declared:
                     #    print(declared)
                     
-
+            def return_awaited_value(coroutine: asyncio.coroutines) -> typing.Any:
+  
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(coroutine)
+                return result
 
             # TODO: Develop a simple CLI for inspecting objects.
+            loop1 = asyncio.get_running_loop()
+            loop2 = asyncio.get_event_loop()
+            coro = dbg.cli_frame_count(event.thread)
+            #fut = asyncio.run_coroutine_threadsafe(coro, loop)
             breakpoint()
 
 
