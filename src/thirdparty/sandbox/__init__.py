@@ -232,22 +232,100 @@ async def start_raw_tty_repl_client(socket_path: str = None, host: str = None, p
         print(f"Connected to {host}:{port}")
 
 
-        async def read_available():
+        async def read_available(areader):
             chunks = []
             while True and len(chunks) == 0:
                 try:
                     # Try reading a small chunk with timeout=0 to avoid blocking
-                    chunk = await asyncio.wait_for(reader.read(1024), timeout=0.01)
+                    chunk = await asyncio.wait_for(areader.read(1024), timeout=0.01)
                     if not chunk:  # EOF
                         break
                     chunks.append(chunk)
                 except asyncio.TimeoutError:
                     # No more data available right now
                     break
-            sys.stdout.write(b"".join(chunks).decode().replace('\n', '\r\n'))
-            sys.stdout.flush()
+            #sys.stdout.write(output.decode().replace('\n', '\r\n'))
+            #sys.stdout.flush()
+            return b"".join(chunks)
 
 
+        async def write_to_server_async():
+            loop = asyncio.get_running_loop()
+            stdin_reader = asyncio.StreamReader()
+            protocol = asyncio.StreamReaderProtocol(stdin_reader)
+
+            # Put stdin in raw mode
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            tty.setraw(fd)
+
+            # Connect StreamReaderProtocol to stdin
+            await loop.connect_read_pipe(lambda: protocol, os.fdopen(fd, "rb"))
+
+            line = []
+
+            
+
+            try:
+                while True:
+
+                    data = await read_available(stdin_reader)
+
+                    if len(data) == 0:
+                        await asyncio.sleep(0)
+
+                    elif data == b'\x04': # Ctrl-D
+                        #print(f"Ctrl D: {data}")
+                        raise ExitReplException()
+                    
+                    elif data in (b'\x08', b'\x7f'): # Backspace
+                        #print("BS")
+                        if line:
+                            line.pop()                                    
+                            sys.stdout.write('\b \b')
+                            sys.stdout.flush()
+                        continue
+
+                    elif data.startswith(b'\x1b'):
+                        print("Esc")
+                        raise ExitReplException()
+                        #handle_escape_sequence(data)
+                        # b'\x1b[A' is UP
+
+                    elif data in (b'\r', b'\n'): # Enter
+                        user_input = b''.join(line) + b'\r\n'
+                        #print(user_input)
+                        line = []
+                        sys.stdout.write('\r\n')
+                        sys.stdout.flush()
+
+                        writer.write(user_input)
+                        await writer.drain()
+
+                        server_resp = await read_available(reader)
+                        sys.stdout.write(server_resp.decode())
+                        sys.stdout.flush()
+
+                    elif b'\n' in data or len(data) > 1:
+                        #handle_paste(data)
+                        print("PASTE DETECTED")
+                        # TODO: Based on the provided input,
+                        # read each line
+                        # Does code.
+                        continue
+                    
+                    else:
+                        #handle_typing(data)
+                        line.append(data)
+                        sys.stdout.write(data.decode())
+                        sys.stdout.flush()
+
+            except ExitReplException:
+                sys.exit(0)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        
         async def write_to_server():
             fd = sys.stdin.fileno()
             flags = fcntl.fcntl(fd, fcntl.F_GETFL)
@@ -366,15 +444,19 @@ async def start_raw_tty_repl_client(socket_path: str = None, host: str = None, p
             finally:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-        await read_available()
-        await write_to_server()
+        server_hello = await read_available(reader)
+        sys.stdout.write(server_hello.decode())
+        sys.stdout.flush()
+        await write_to_server_async()
         
 
-    except ConnectionResetError:
-        print("\nClient disconnected")
+    except ConnectionResetError as e:
+        print(f"\nClient disconnected: {e}")
         pass
     except SystemExit:
         pass
+    except Exception as e:
+        print(f"Exception: {e}")
 
 
 
@@ -400,15 +482,15 @@ async def handle_repl_client(reader: asyncio.StreamReader, writer: asyncio.Strea
             if not line_bytes:
                 break  # client disconnected
 
+            print(line_bytes)
             line = line_bytes.decode()
-            #print(line)
             
             output = io.StringIO()
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 more = console.push(line)
 
-            captured = output.getvalue()
-            #print(captured.encode())
+            captured = output.getvalue().replace('\n', '\r\n')
+            print(captured.encode())
             if captured:
                 writer.write(captured.encode())
 
