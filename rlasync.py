@@ -181,6 +181,8 @@ async def async_repl():
                 final_buffer.append('')
                 final_src = '\n'.join(final_buffer)
 
+                # !!!!!! BUG: We ignore the case where a single line would return
+                #             more == True if given to code.InteractiveConsole.
                 if len(final_buffer) == 2 and len(final_src) > 1:
                     await async_run_single_line(final_buffer[0])
                 else:
