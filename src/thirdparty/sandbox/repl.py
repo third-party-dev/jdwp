@@ -100,14 +100,18 @@ async def async_run_single_line(source_code, namespace):
             # Note: This code is blocking!
             exec(source_code, namespace, namespace)
     else:
-        # Need to wrap await.
-        # TODO: Consider UUID for all unique variables.
-        # TODO: Consider checking to see if symbol exists.
+        # Need to wrap potential compound await expression into a single await.
+
+        # To distinguish out new symbols from user symbols we prefix.
+        # - We can also consider adding UUID for all new symbols.
+        # - We can consider checking to see if symbol exists.
+        # - We can delete symbols we use when we're done with them.
 
         # Wrapper header.
         wrapped_source = [
-            'import asyncio',
-            'async def __thirdparty_sandbox_async_def():']
+            'import asyncio as __thirdparty_sandbox_asyncio',
+            'async def __thirdparty_sandbox_async_def():'
+        ]
 
         # Expose all the global variables to function.
         for key in namespace:
@@ -118,27 +122,37 @@ async def async_run_single_line(source_code, namespace):
         if is_expr:
             wrapped_source.append(f"    __thirdparty_sandbox_ret = {source_code}")
         else:
-            # TODO: Check for (premature) return or yield?
+            # TODO: Check for (premature) return or yield in source_code?
             wrapped_source.append(f"    {source_code}")
 
         # Update globals() with any local assignments.
         wrapped_source.append('    globals().update(locals())')
+
         if is_expr:
             wrapped_source.append('    return __thirdparty_sandbox_ret')
+        
+        task_launcher = [
+            '__thirdparty_sandbox_task = ',
+            '__thirdparty_sandbox_asyncio.get_running_loop().',
+            'create_task(__thirdparty_sandbox_async_def())',
+        ]
+        wrapped_source.append(''.join(task_launcher))
 
-        # Run the function definition in global scope.
+        # Run the function definition in user given namespace (e.g. globals()).
         exec('\n'.join(wrapped_source), namespace, namespace)
 
-        # Run the function in the event loop.
-        #ret = await __thirdparty_sandbox_async_def()
-        # TODO: UGH! I still need a way to await in another namespace!
+        # Spin the event loop until the task is complete.
+        while not namespace['__thirdparty_sandbox_task'].done():
+            await asyncio.sleep(0.01)
+        ret = namespace['__thirdparty_sandbox_task'].result()
 
         # If original source was an expression, print it.
-        # TODO: Consider not printing Calls? print() prints None
-        if is_expr and ret:
+        if is_expr and ret is not None:
             print(ret)
 
-        # TODO: Consider wiping the created state?
+        # Wiping created symbols from namespace
+        namespace.pop('__thirdparty_sandbox_async_def', None)
+        namespace.pop('__thirdparty_sandbox_task', None)
 
 
 async def async_input(prompt: str) -> str:
@@ -497,7 +511,9 @@ class Repl():
 if __name__ == "__main__":
     #asyncio.run(Repl().async_repl())
     #Repl().blocking_repl()
-    asyncio.run(Repl().start_repl_server(socket_path="/tmp/asyncrepl.sock"))
+    #asyncio.run(Repl().start_repl_server(socket_path="/tmp/asyncrepl.sock"))
+    asyncio.run(Repl().async_repl_client(socket_path="/tmp/asyncrepl.sock"))
+    
 
 '''
 
