@@ -41,6 +41,8 @@ try:
 
             final_buffer.append('')
             final_src = '\n'.join(final_buffer)
+            if len(final_buffer) == 2 and len(final_src) > 0:
+                symbol='eval'
             more = console.runsource(final_src, symbol="exec")  # <---- No longer push()
             prompt = ps2 if more else ps1
 
