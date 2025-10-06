@@ -347,6 +347,7 @@ class JvmDebugger():
                 getvalues_reply, error_code = await dbg.jdwp.StackFrame.GetValues(getvalues_req)
                 print(f"  StackFrame.GetValues = {getvalues_reply}")
 
+
                 # for entry in getvalues_reply.values:
                 #     print(f"  Attempting to fetch fields for ObjectID: {entry.value}")
                 #     reftype_reply, _ = await dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))

@@ -13,6 +13,7 @@ pip install pyaxml
 import asyncio
 from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
 import thirdparty.sandbox as __sandbox__
+from thirdparty.sandbox.repl import Repl
 import thirdparty.jvmdebugger
 from thirdparty.jvmdebugger.state import *
 
@@ -38,6 +39,7 @@ adb shell am set-debug-app -w sh.kau.playground ; \
   sleep 3 && ./test.py
 '''
 
+async def __thirdparty_sandbox_async_def(): pass
 
 # Keep these in global scope for remote REPL accessibility.
 jdwp = None
@@ -90,17 +92,18 @@ async def main():
 
 
 async def main_with_sandbox():
-  __sandbox__.hot_reload_module(thirdparty.jvmdebugger)
+  #__sandbox__.hot_reload_module(thirdparty.jvmdebugger)
   # Note: Need to send the globals() from this scope or we get the module's globals().
-  sandbox_coro = __sandbox__.start_sandbox(
-    repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
-    exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
-    #dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
-  )
-  sandbox_task = asyncio.create_task(sandbox_coro)
+  #sandbox_coro = __sandbox__.start_sandbox(
+  #  repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
+  #  exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
+  #  #dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
+  #)
+  #sandbox_task = asyncio.create_task(sandbox_coro)
+  repl_task = asyncio.create_task(Repl(namespace=globals()).start_repl_server(socket_path="/tmp/asyncrepl.sock"))
   # TODO: Consider a event handler for when hot reload occurs to actually update references?!
   main_task = asyncio.create_task(main())
-  await asyncio.gather(sandbox_task, main_task)
+  await asyncio.gather(repl_task, main_task)
 
 
 def reload_dbg():

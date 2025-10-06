@@ -13,6 +13,7 @@ import os
 import json
 import io
 import contextlib
+import traceback
 
 
 identifier_re = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -56,7 +57,7 @@ def is_valid_python_identifier(key) -> bool:
     )
 
 
-def blocking_run_single_line(source_code):
+def blocking_run_single_line(source_code, namespace):
 
     try:
         tree = ast.parse(source_code, mode="exec")
@@ -68,18 +69,18 @@ def blocking_run_single_line(source_code):
         # No wrapping required.
         if is_ast_expression(tree):
             # !!!!!! BUG: This prints None when the call is print()
-            ret = eval(source_code)
+            ret = eval(source_code, namespace, namespace)
             if ret is not None:
                 print(ret)
         else:
-            exec(source_code, globals(), globals())
+            exec(source_code, namespace, namespace)
     else:
         # Need to wrap await.
         raise NotImplementedError("Calling await from sync REPL not supported.")
 
 
 # Note: This function needs to stay in global scope.
-async def async_run_single_line(source_code):
+async def async_run_single_line(source_code, namespace):
 
     try:
         tree = ast.parse(source_code, mode="exec")
@@ -92,12 +93,12 @@ async def async_run_single_line(source_code):
     if not is_ast_naked_await(tree):
         # No wrapping required.
         if is_expr:
-            ret = eval(source_code)
+            ret = eval(source_code, namespace, namespace)
             if ret is not None:
                 print(ret)
         else:
             # Note: This code is blocking!
-            exec(source_code, globals(), globals())
+            exec(source_code, namespace, namespace)
     else:
         # Need to wrap await.
         # TODO: Consider UUID for all unique variables.
@@ -109,7 +110,7 @@ async def async_run_single_line(source_code):
             'async def __thirdparty_sandbox_async_def():']
 
         # Expose all the global variables to function.
-        for key in globals():
+        for key in namespace:
             if is_valid_python_identifier(key):
                 wrapped_source.append(f'    global {key}')
 
@@ -126,10 +127,11 @@ async def async_run_single_line(source_code):
             wrapped_source.append('    return __thirdparty_sandbox_ret')
 
         # Run the function definition in global scope.
-        exec('\n'.join(wrapped_source), globals(), globals())
+        exec('\n'.join(wrapped_source), namespace, namespace)
 
         # Run the function in the event loop.
-        ret = await __thirdparty_sandbox_async_def()
+        #ret = await __thirdparty_sandbox_async_def()
+        # TODO: UGH! I still need a way to await in another namespace!
 
         # If original source was an expression, print it.
         # TODO: Consider not printing Calls? print() prints None
@@ -163,8 +165,9 @@ def async_def_complete(final_buffer):
 
 class Repl():
 
-    def __init__(self):
-        self.console = code.InteractiveConsole(globals())
+    def __init__(self, namespace={}):
+        self.namespace = namespace
+        self.console = code.InteractiveConsole(self.namespace)
         self.ps1 = ">>> "
         self.ps2 = "... "
         self.prompt = self.ps1
@@ -223,6 +226,7 @@ class Repl():
                         if len(final_buffer) == 1:
                             await async_run_single_line(final_buffer[0])
                         else:
+                            # TODO: Use exec and self.namespace
                             more = self.console.runsource(final_src, symbol="exec")
                             self.prompt = self.ps2 if more else self.ps1
                     
@@ -377,13 +381,13 @@ class Repl():
                     try:
                         if len(final_src) > 0:
                             if len(final_buffer) == 1:
-                                await async_run_single_line(final_buffer[0])
+                                await async_run_single_line(final_buffer[0], namespace)
                             else:
-                                exec(final_src, globals(), globals())
+                                exec(final_src, namespace, namespace)
                     except EOFError:
                         raise
                     except Exception as e:
-                        print(f"Exception: {e} Line:{e.__traceback__.tb_lineno}")
+                        print(f"Exception: {e} Line:{traceback.format_exc()}")
                     
                 captured = output.getvalue().replace('\n', '\r\n')
                 #print(captured.encode())
@@ -400,14 +404,14 @@ class Repl():
             writer.close()
             await writer.wait_closed()
         except Exception as e:
-            print(f"Exception: {e} Line:{e.__traceback__.tb_lineno}")
+            print(f"Exception: {e} Line:{e.__traceback__}")
                 
+    # dbg.cli_frame_count()
 
-
-    async def start_repl_server(self, socket_path: str=None, host: str=None, port: int=None, namespace={}):
+    async def start_repl_server(self, socket_path: str=None, host: str=None, port: int=None):
         try:
             async def handle_repl_client_wrapper(reader, writer):
-                await Repl._handle_repl_client(reader, writer, namespace)
+                await Repl._handle_repl_client(reader, writer, self.namespace)
 
             server = None
             if socket_path:
@@ -473,8 +477,9 @@ class Repl():
                     final_src = '\n'.join([*final_buffer, ''])
                     if len(final_src) > 0:
                         if len(final_buffer) == 1:
-                            blocking_run_single_line(final_buffer[0])
+                            blocking_run_single_line(final_buffer[0], self.namespace)
                         else:
+                            # TODO: use exec instead with self.namespace
                             more = self.console.runsource(final_src, symbol="exec")
                             self.prompt = self.ps2 if more else self.ps1
 
