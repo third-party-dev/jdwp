@@ -1,5 +1,7 @@
 import asyncio
-from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, Long, ClassID, ObjectID
+from thirdparty.jdwp import (
+    Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
+    Long, ClassID, ObjectID, FrameID, MethodID)
 
 from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
@@ -269,13 +271,120 @@ class JvmDebugger():
                     #print(f"CLASS({classID}) FIELD: {entry}")
                 classInfo.fields_loaded = True
 
+
+
+
+
     #asyncio.run_coroutine_threadsafe(dbg.cli_frame_count(26097), asyncio.get_event_loop()).result()
     #asyncio.run_coroutine_threadsafe(dbg.cli_frame_count(26094), dbg.loop)
     async def cli_frame_count(self, thread_id: int):
         frame_count, error_code = await self.jdwp.ThreadReference.FrameCount(ThreadID(thread_id))
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: {Jdwp.Error.string[error_code]}")
-        print(frame_count)
+        return frame_count
+
+
+    async def cli_frame(self, thread_id: int, index: int=0, length: int=1):
+        frames_req = self.jdwp.ThreadReference.FramesRequest()
+        frames_req.thread = ThreadID(ThreadID(thread_id))
+        frames_req.startFrame = Int(index)
+        frames_req.length = Int(-1) # -1 for everything
+
+        frames_reply, error_code = await self.jdwp.ThreadReference.Frames(frames_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return frames_reply
+
+    
+    async def cli_method_slots(self, ref_id: int, method_id: int):
+        vtable_req = self.jdwp.Method.VariableTableRequest()
+        vtable_req.refType = ReferenceTypeID(ReferenceTypeID(ref_id))
+        vtable_req.methodID = MethodID(method_id)
+        vtable_reply, error_code = await self.jdwp.Method.VariableTable(vtable_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return vtable_reply
+
+    
+    # Fetch the frame value with the method slots
+    async def cli_frame_values(self, thread_id: int, frame_id: int):
+        # To get the frame values, we need:
+        # 1. The specific frame with location pointing to class/method.
+        # 2. The variable table from the class/method with slot information.
+        # 3. The slot values using the variable information
+        
+        # Get the frame with the location of class/method.
+        frames = await self.cli_frame(thread_id=thread_id, index=0, length=-1)
+        if not frames:
+            print("ERROR: No frames")
+            return None
+        frame = None
+        for entry in frames.frames:
+            if entry.frameID == frame_id:
+                frame = entry
+                break
+        if frame == None:
+            print("ERROR: Frame not found.")
+            return None
+
+        # Get the variable table from class/method.
+        vartab = await self.cli_method_slots(frame.location.classID, frame.location.methodID)
+        if not vartab:
+            print("ERROR: No variable table.")
+            return None
+
+        # Using class/method variable table, fetch slot values.
+        getvalues_req = self.jdwp.StackFrame.GetValuesRequest()
+        getvalues_req.thread = ThreadID(thread_id)
+        getvalues_req.frame = FrameID(frame_id)
+        for slot in vartab.slots:
+            slot_req = self.jdwp.StackFrame.GetValuesSlotEntry()
+            slot_req.slot = Int(slot.slot)
+            slot_req.sigbyte = Byte(ord(slot.signature[0]))
+            getvalues_req.slots.append(slot_req)
+        getvalues_reply, error_code = await self.jdwp.StackFrame.GetValues(getvalues_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return getvalues_reply
+
+
+    async def cli_object_type(self, object_id: int):
+        reftype_reply, error_code = await self.jdwp.ObjectReference.ReferenceType(ObjectID(object_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return reftype_reply.typeID
+
+
+    async def cli_class_fields(self, ref_id: int):
+        fields_reply, error_code = await self.jdwp.ReferenceType.Fields(ReferenceTypeID(ref_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return fields_reply
+
+
+    async def cli_object_values(self, object_id: int):
+        # To get an object's values we need:
+        # 1. The object type (i.e. referencetype)
+        # 2. The referencetype fields
+        # 3. The object field values
+
+        ref_id = await self.cli_object_type(object_id)
+        if not ref_id:
+            print("ERROR: No object type found.")
+            return None
+        fields = await self.cli_class_fields(ref_id)
+        if not fields:
+            print("ERROR: No fields for type found.")
+            return None
+
+        getvalues_req = self.jdwp.ObjectReference.GetValuesRequest()
+        getvalues_req.objectid = ObjectID(object_id)
+        for field in fields.declared:
+            getvalues_req.fields.append(FieldID(field.fieldID))
+        getvalues_reply, error_code = await self.jdwp.ObjectReference.GetValues(getvalues_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: {Jdwp.Error.string[error_code]}")
+        return getvalues_reply
 
 
     @staticmethod
@@ -350,7 +459,7 @@ class JvmDebugger():
 
                 # for entry in getvalues_reply.values:
                 #     print(f"  Attempting to fetch fields for ObjectID: {entry.value}")
-                #     reftype_reply, _ = await dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))
+                #     reftype_reply, _ = wait dbg.jdwp.ObjectReference.ReferenceType(ObjectID(entry.value))
                 #     print(f"    Reftype Reply: {reftype_reply}")
 
                 #     # Make sure we know the fields

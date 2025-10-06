@@ -120,7 +120,7 @@ class Tag():
     ARRAY = 0x5b
     BYTE = 0x42
     CHAR = 0x43
-    OBJECT = 0x4c
+    OBJECT = 0x4c  # 76
     FLOAT = 0x46
     DOUBLE = 0x44
     INT = 0x49

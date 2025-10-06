@@ -264,7 +264,8 @@ class Repl():
         while True and len(chunks) == 0:
             try:
                 # Try reading a small chunk with timeout=0 to avoid blocking
-                chunk = await asyncio.wait_for(areader.read(1024), timeout=timeout)
+                # TODO: This does not loop correctly. Making buffer bigger for now.
+                chunk = await asyncio.wait_for(areader.read(102400), timeout=timeout)
                 if not chunk:  # EOF
                     raise EOFError()
                 chunks.append(chunk)

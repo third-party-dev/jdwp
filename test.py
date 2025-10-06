@@ -39,6 +39,12 @@ adb shell am set-debug-app -w sh.kau.playground ; \
   sleep 3 && ./test.py
 '''
 
+'''
+await dbg.cli_frame(26092)
+await dbg.cli_frame_values(26092, 131072)
+await dbg.cli_object_values()
+'''
+
 async def __thirdparty_sandbox_async_def(): pass
 
 # Keep these in global scope for remote REPL accessibility.
