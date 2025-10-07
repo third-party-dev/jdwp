@@ -15,9 +15,6 @@ from typing import Optional, List, Tuple
 
 import code
 
-
-
-
 # Utility imports
 import multiprocessing
 import pdb
@@ -26,73 +23,8 @@ from fuzzyfinder import fuzzyfinder
 from pprint import pprint
 
 
-# class ContextThread(threading.Thread):
-#     def __init__(self, func, frame):
-#         super().__init__()
-#         self.func = func
-#         self.frame = frame
-#         self.result = None
-#         self.exc = None
-
-#     def run(self):
-#         try:
-#             # Pass locals and globals to func
-#             locals_copy = dict(self.frame.f_locals)
-#             globals_copy = self.frame.f_globals
-#             # Call func with access to frame locals/globals
-#             self.result = self.func(locals_copy, globals_copy)
-#         except Exception as e:
-#             self.exc = e
 
 
-
-
-
-# class MyPdb(pdb.Pdb):
-#     # def __init__(self, *args, **kwargs):
-#     #     super().__init__(*args, **kwargs)
-
-#     def do_runthread(self, arg):
-#         frame = self.curframe
-#         if arg not in frame.f_locals:
-#             print(f"No function named '{arg}' in locals")
-#             return
-#         func = frame.f_locals[arg]
-
-#         def wrapper(locals_, globals_):
-#             # Example: access x and y from frame locals
-#             x = locals_.get('x', 0)
-#             y = locals_.get('y', 0)
-#             print(f"In thread: x + y = {x + y}")
-#             return x + y
-
-#         thread = ContextThread(wrapper, frame)
-#         thread.start()
-#         print("Thread started; it has access to frame locals")
-#         thread.join()  # Optional: block until done
-#         if thread.exc:
-#             print("Thread raised:", thread.exc)
-#         else:
-#             print("Thread result:", thread.result)
-
-#     async def working_await(self):
-#         print("It worked.")
-
-
-#     def do_await(self, arg):
-#         self.pending_coro = self.curframe.f_locals[arg]
-#         self.pending_future = asyncio.run_coroutine_threadsafe(self.working_await(coro), self.event_loop)
-#         while not self.pending_future.done():
-#             self.do_continue()
-#             print(self.pending_future.result())
-#             self.set_trace()
-
-
-#         #print("-----")
-#         #pprint(frame.f_globals)
-
-#     def help_await(self):
-#         print("await <arg> - does something special")
 
 
 class JvmDebugger():
@@ -728,3 +660,46 @@ class JvmDebugger():
         print("-- Cache Info --")
         print(f"Class Count: {len(self.classes_by_id)}")
         print(f"Thread Count: {len(self.classes_by_id)}")
+    
+
+    '''
+    # Get list of ThreadInfo references
+    await dbg.threads() -> List[ThreadInfo]
+
+    # ThreadInfo - threadID, name?
+
+    # Get number of stack frames (not cached).
+    # Call this once and use "frames" as the local-only cache.
+    # Store thread id in frameobject so you don't have to remember.
+    frames = await dbg.frames(thread: ThreadInfo) -> FrameInfo
+
+    # FrameInfo - threadID, frameID, location, values
+
+    # Create ObjectInfo instance and gets fields and values.
+    # Also has references to ClassInfo.MethodInfo for methods.
+
+    objref = await dbg.deref(object_id) -> ObjectInfo
+
+    # Used to show object fields and their values.
+    # Note: If the value is an object, it'll be a 
+    #       reference to another ObjectInfo
+    await dbg.fields(obj: ObjectInfo)
+
+    # ObjectInfo.getattr 
+    await objref.field_one.field_two -> ObjectInfo
+
+    # If we set an attribute, the types must match.
+    # An object attribute can only be set to an ObjectInfo
+    # Under the hood, its really being set to the objectID.
+    # ObjectInfos should never be manually created. They are initialized
+    #   by dbg.deref() and then subsequently filled out by getattr.
+    # All ObjectInfo objects are referenced in a dict in dbg for
+    # deduplication.
+
+    # Used to list available methods.
+    # Note: (Invoking isn't really a goal.)
+    await dbg.methods(obj: ObjectInfo)
+    # Consider: Call method by name plus sig as first param.
+    # Example: objref.func("(L)V", objref)
+
+    '''
