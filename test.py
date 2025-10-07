@@ -57,69 +57,64 @@ dbg_state = dbg.state
    
 
 async def main():
-  global dbg
-  global jdwp
+    global dbg
+    global jdwp
 
-  print("Connecting debugger to localhost:8700")
-  await dbg.start('127.0.0.1', 8700)
-  dbg.print_summary()
-  
+    print("Connecting debugger to localhost:8700")
+    await dbg.start('127.0.0.1', 8700)
+    dbg.print_summary()
 
-  # TODO: Do deferred breakpoints.
-  # Wait for Class Prepare for target class via callback.
-  # Get composite event in callback
-  # - clear event request id
-  # - fetch method references for loaded class
-  # - Set event breakpoint with callback for loaded class
-  #   - Need classID, methodID and bytecode index (Default=0)
-  # 
-
-  # TODO: Determine stepping ... maybe auto stops events after single fire?
-  # TODO: Determine variable examination.
-
-  print("Setting up deferred breakpoint.")
+    print("Setting up deferred breakpoint.")
 
 
-  class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
-  #method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
-  method_signature = ('quoteForTheDay', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
-   
-  await dbg.enable_deferred_breakpoint(class_signature, method_signature)
+    class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
+    #method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
+    method_signature = ('quoteForTheDay', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
 
-  await dbg.resume_vm()
+    async def handle_breakpoint(*args, **kwargs):
+        print("HERE WE ARE!")
 
+    await dbg.create_breakpoint(
+        class_signature='Lsh/kau/playground/quoter/QuotesRepoImpl;',
+        method_name='quoteForTheDay',
+        method_signature='(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
+        callback=handle_breakpoint,
+        count=3,
+    ).set_breakpoint()
 
-  try:
-    print("Waiting for events... Ctrl-C to quit.")
-    while True:
-      await asyncio.sleep(1)
-  except KeyboardInterrupt:
-    exit(0)
+    await dbg.resume_vm()
+
+    try:
+        print("Waiting for events... Ctrl-C to quit.")
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        exit(0)
 
 
 async def main_with_sandbox():
-  #__sandbox__.hot_reload_module(thirdparty.jvmdebugger)
-  # Note: Need to send the globals() from this scope or we get the module's globals().
-  #sandbox_coro = __sandbox__.start_sandbox(
-  #  repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
-  #  exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
-  #  #dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
-  #)
-  #sandbox_task = asyncio.create_task(sandbox_coro)
-  repl_task = asyncio.create_task(Repl(namespace=globals()).start_repl_server(socket_path="/tmp/asyncrepl.sock"))
-  # TODO: Consider a event handler for when hot reload occurs to actually update references?!
-  main_task = asyncio.create_task(main())
-  await asyncio.gather(repl_task, main_task)
+    #__sandbox__.hot_reload_module(thirdparty.jvmdebugger)
+    # Note: Need to send the globals() from this scope or we get the module's globals().
+    #sandbox_coro = __sandbox__.start_sandbox(
+    #  repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
+    #  exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
+    #  #dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
+    #)
+    #sandbox_task = asyncio.create_task(sandbox_coro)
+    repl_task = asyncio.create_task(Repl(namespace=globals()).start_repl_server(socket_path="/tmp/asyncrepl.sock"))
+    # TODO: Consider a event handler for when hot reload occurs to actually update references?!
+    main_task = asyncio.create_task(main())
+    await asyncio.gather(repl_task, main_task)
 
 
 def reload_dbg():
-  global dbg
-  global dbg_state
-  dbg = thirdparty.jvmdebugger.JvmDebugger(dbg_state)
+    global dbg
+    global dbg_state
+    dbg = thirdparty.jvmdebugger.JvmDebugger(dbg_state)
 
 
 if __name__ == "__main__":
-  asyncio.run(main_with_sandbox())
+    asyncio.run(main_with_sandbox())
 
 
 
