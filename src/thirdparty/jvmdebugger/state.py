@@ -52,3 +52,5 @@ class JvmDebuggerState():
     self.threads_by_id = {}
     #self.thread_by_name = {}
     self.dead_threads = []
+
+    self.objects_by_id = {}

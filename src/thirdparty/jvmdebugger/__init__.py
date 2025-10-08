@@ -7,6 +7,7 @@ from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
 from thirdparty.jvmdebugger.breakpoint import BreakpointInfo
 from thirdparty.jvmdebugger.thread import ThreadInfo
+from thirdparty.jvmdebugger.object import ObjectInfo
 
 import thirdparty.sandbox as __sandbox__
 import typing
@@ -83,6 +84,7 @@ class JvmDebugger():
         self.unloaded_classes = self.state.unloaded_classes
         self.threads_by_id = self.state.threads_by_id
         self.dead_threads = self.state.dead_threads
+        self.objects_by_id = self.state.objects_by_id
 
         # TODO: Consider the event handlers. We won't automatically hot reload them.
 
@@ -116,6 +118,12 @@ class JvmDebugger():
         await self.request_all_threads()
         print("Done fetching classes.")
 
+
+    def object_ref(self, object_id):
+
+        if object_id in self.objects_by_id:
+            return self.objects_by_id[object_id]
+        return ObjectInfo(self, object_id)
 
     @staticmethod
     async def handle_class_prepare(event, composite, dbg):
@@ -227,7 +235,20 @@ class JvmDebugger():
         evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
         evt_req.requestID = request_id
         await self.jdwp.EventRequest.Clear(evt_req)
-        #print(f"Cleared {request_id} CLASS_PREPARE event.")
+
+    
+
+    async def disable_breakpoint_event(self, request_id):
+        evt_req = self.jdwp.EventRequest.ClearRequest()
+        evt_req.eventKind = Byte(Jdwp.EventKind.BREAKPOINT)
+        evt_req.requestID = request_id
+        await self.jdwp.EventRequest.Clear(evt_req)
+
+    async def disable_step_event(self, request_id):
+        evt_req = self.jdwp.EventRequest.ClearRequest()
+        evt_req.eventKind = Byte(Jdwp.EventKind.SINGLE_STEP)
+        evt_req.requestID = request_id
+        await self.jdwp.EventRequest.Clear(evt_req)
 
 
     async def update_class_methods(self, classID: ReferenceTypeID):

@@ -52,7 +52,7 @@ class SlotInfo():
             return "SlotInfo(ERROR)"
     
     async def get_ref(self):
-        return await ObjectInfo(self.dbg, self.tagged_value.value)._update()
+        return await self.dbg.object_ref(self.tagged_value.value)._update()
 
 
 class FrameInfo():

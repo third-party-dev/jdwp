@@ -159,6 +159,34 @@ class Tag():
         CLASS_OBJECT,
     ]
 
+    @staticmethod
+    def type_str(tag):
+        tag_map = {
+            Jdwp.Tag.ARRAY: 'Array',
+            Jdwp.Tag.BYTE: 'Byte',
+            Jdwp.Tag.CHAR: 'Char',
+            Jdwp.Tag.OBJECT: 'Object',
+            Jdwp.Tag.FLOAT: 'Float',
+            Jdwp.Tag.DOUBLE: 'Double',
+            Jdwp.Tag.INT: 'Int',
+            Jdwp.Tag.LONG: 'Long',
+            Jdwp.Tag.SHORT: 'Short',
+            Jdwp.Tag.VOID: 'Void',
+            Jdwp.Tag.BOOLEAN: 'Boolean',
+            Jdwp.Tag.STRING: 'String',
+            Jdwp.Tag.THREAD: 'Thread',
+            Jdwp.Tag.THREAD_GROUP: 'ThreadGroup',
+            Jdwp.Tag.CLASS_LOADER: 'ClassLoader',
+            Jdwp.Tag.CLASS_OBJECT: 'ClassObject',
+        }
+
+
+        _type_str = 'Unknown'
+        if tag in tag_map:
+            _type_str = tag_map[tag]
+
+        return _type_str
+
 class Error():
     NONE = 0
 

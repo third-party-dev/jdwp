@@ -53,6 +53,7 @@ async def instruction_str(dbg, event):
 async def std_break_event(event, composite, args):
     bp, = args
     
+    await bp.dbg.disable_breakpoint_event(event.requestID)
     await bp.dbg.thread(event.thread)._update(event)
 
     print(f"Bkpt@ {await bp.location_str(event)}")
@@ -60,17 +61,18 @@ async def std_break_event(event, composite, args):
 
     # DEBUG CODE
 
-    slot = bp.dbg.slot(event.thread)
-    print(f"SLOT: {slot}")
-    objref = await slot.get_ref()
-    print(f"OBJ: {objref}")
-    #pdb.set_trace()
+    # slot = bp.dbg.slot(event.thread)
+    # print(f"SLOT: {slot}")
+    # objref = await slot.get_ref()
+    # print(f"OBJ: {objref}")
+    # #pdb.set_trace()
 
 
     
 async def std_step_event(event, composite, args):
     bp, = args
 
+    await bp.dbg.disable_step_event(event.requestID)
     await bp.dbg.threads_by_id[event.thread]._update(event)
 
     print(f"Step@ {await bp.location_str(event)}")
