@@ -6,6 +6,7 @@ from thirdparty.jdwp import (
 from thirdparty.dalvik.dex import disassemble
 from thirdparty.jvmdebugger.state import *
 from thirdparty.jvmdebugger.breakpoint import BreakpointInfo
+from thirdparty.jvmdebugger.thread import ThreadInfo
 
 import thirdparty.sandbox as __sandbox__
 import typing
@@ -116,9 +117,9 @@ class JvmDebugger():
         print("Done fetching classes.")
 
 
-    # Callback for JvmDebugger.enable_class_prepare_events()
     @staticmethod
     async def handle_class_prepare(event, composite, dbg):
+        """Callback for JvmDebugger.enable_class_prepare_events()"""
         if event.typeID not in dbg.classes_by_id:
             classInfo = ClassInfo()
             classInfo.refTypeTag = event.refTypeTag
@@ -139,7 +140,7 @@ class JvmDebugger():
         evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
         # No modifiers.
-        self.class_prepare_reqid, _ = await self.jdwp.EventRequest.Set(evt_req)
+        self.class_prepare_reqid, error_code = await self.jdwp.EventRequest.Set(evt_req)
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: Failed to enable class prepare events: {Jdwp.Error.string[error_code]}")
             return
@@ -190,8 +191,7 @@ class JvmDebugger():
 
         async def handle_thread_start(event, composite, wp):
             # TODO: Do we check if it already existed?
-            threadInfo = ThreadInfo()
-            threadInfo.threadID = event.thread
+            threadInfo = ThreadInfo(self, event.thread)
             # TODO: Do we see if it already exists first?
             self.threads_by_id[threadInfo.threadID] = threadInfo
             #print(f"THREAD_START: {threadInfo.threadID}")
@@ -252,7 +252,7 @@ class JvmDebugger():
             classInfo.methods_by_id[methodInfo.methodID] = methodInfo
             # Note: method name or signature may be ambiguous.
             method_signature = (methodInfo.name, methodInfo.signature)
-            print(f"Inserting method_signature {method_signature}")
+            #print(f"Inserting method_signature {method_signature}")
             classInfo.methods_by_signature[method_signature] = methodInfo
 
 
@@ -269,8 +269,8 @@ class JvmDebugger():
                     req.methodID = methodID
                     reply, error_code = await self.jdwp.Method.Bytecodes(req)
                     if error_code != Jdwp.Error.NONE:
-                    print(f"ERROR: Failed to fetch bytecode: {Jdwp.Error.string[error_code]}")
-                    return
+                        print(f"ERROR: Failed to fetch bytecode: {Jdwp.Error.string[error_code]}")
+                        return
                     methodInfo.bytecode = reply.bytecodes
         
                 return methodInfo.bytecode
@@ -278,7 +278,7 @@ class JvmDebugger():
         return None
 
 
-    async def load_class_fields(self, classID):
+    async def update_class_fields(self, classID):
         if classID in self.classes_by_id:
             classInfo = self.classes_by_id[classID]
 
@@ -299,14 +299,7 @@ class JvmDebugger():
                 classInfo.fields_loaded = True
 
 
-    def create_breakpoint(self,
-        class_signature=None,
-        method_name=None,
-        method_signature=None,
-        callback=None,
-        bytecode_index=0,
-        count=1,
-    ):
+    def create_breakpoint(self, **kwargs):
         """Create object to manage immediate and deferred breakpoint.
 
         Args:
@@ -322,17 +315,15 @@ class JvmDebugger():
             BreakpointInfo: Breakpoint Object. Run `await obj.set_breakpoint()` to activate!
         """
 
-        if not class_signature or not method_name or not method_signature:
+        if 'class_signature' not in kwargs or \
+           'method_name' not in kwargs or \
+           'method_signature' not in kwargs or \
+           not kwargs['class_signature'] or \
+           not kwargs['method_name'] or \
+           not kwargs['method_signature']:
             raise RuntimeError("Must have class_signature, method_name, and method_signature set for breakpoint.")
 
-        return BreakpointInfo(self,
-            class_signature=class_signature,
-            method_name=method_name,
-            method_signature=method_signature,
-            callback=callback,
-            bytecode_index=bytecode_index,
-            count=count,
-        )
+        return BreakpointInfo(self, **kwargs)
 
 
     async def request_all_classes(self):
@@ -362,9 +353,7 @@ class JvmDebugger():
             print(f"ERROR: Failed to get all threads: {Jdwp.Error.string[error_code]}")
             return
         for t in thread_reply.threads:
-            threadInfo = ThreadInfo()
-            threadInfo.threadID = t
-            self.threads_by_id[threadInfo.threadID] = threadInfo
+            self.threads_by_id[t] = ThreadInfo(self, t)
 
 
     async def resume_vm(self):
@@ -383,6 +372,18 @@ class JvmDebugger():
         print("-- Cache Info --")
         print(f"Class Count: {len(self.classes_by_id)}")
         print(f"Thread Count: {len(self.classes_by_id)}")
-    
 
+
+
+
+
+    def slot(self, thread_id, slot_idx=0, frame_idx=0):
+        return self.thread(thread_id).frame(frame_idx).slot(slot_idx)
+
+
+    def thread(self, thread_id):
+        try:
+            return self.threads_by_id[thread_id]
+        except KeyError:
+            return None
     

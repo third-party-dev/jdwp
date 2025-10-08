@@ -4,7 +4,7 @@ from thirdparty.jdwp import (
     Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
     Long, ClassID, ObjectID, FrameID, MethodID)
 
-from thirdparty.dalvik.dex import disassemble
+import thirdparty.dalvik.dex
 from thirdparty.jvmdebugger.state import *
 
 
@@ -30,17 +30,81 @@ def jvm_to_java(sig: str) -> str:
     else:
         raise ValueError(f"Invalid JVM signature: {sig}")
 
-async def noop(event, composite, args):
+
+async def noop_break_event(event, composite, args):
     pass
+
+
+async def instruction_str(dbg, event):
+    bytecode = await dbg.load_method_bytecode(
+        event.location.classID, event.location.methodID)
+
+    try:
+        offset = event.location.index * 2
+        prev_offset = offset
+        ins, offset = thirdparty.dalvik.dex.disassemble(bytecode, offset)
+        ins_bytecode = bytes(bytecode[prev_offset:offset]).hex()
+        ins_bytecode_idx = f'{int(prev_offset/2):04x}'
+        return f'\n{ins_bytecode_idx}: {ins} [bytecode: {ins_bytecode}]'
+    except TypeError:
+        return f'\nERROR: Bytecode Instruction Not Available'
+
+
+async def std_break_event(event, composite, args):
+    bp, = args
+    
+    await bp.dbg.thread(event.thread)._update(event)
+
+    print(f"Bkpt@ {await bp.location_str(event)}")
+    print(await instruction_str(bp.dbg, event))
+
+    # DEBUG CODE
+
+    slot = bp.dbg.slot(event.thread)
+    print(f"SLOT: {slot}")
+    objref = await slot.get_ref()
+    print(f"OBJ: {objref}")
+    #pdb.set_trace()
+
+
+    
+async def std_step_event(event, composite, args):
+    bp, = args
+
+    await bp.dbg.threads_by_id[event.thread]._update(event)
+
+    print(f"Step@ {await bp.location_str(event)}")
+    print(await instruction_str(bp.dbg, event))
+
+
+async def break_location_str(dbg, event):
+    # Ensure we have the methods for the target class.
+    await dbg.update_class_methods(event.location.classID)
+
+    class_info = dbg.classes_by_id[event.location.classID]
+    class_name = jvm_to_java(class_info.signature)
+    method_info = class_info.methods_by_id[event.location.methodID]
+    method_name = method_info.name
+    method_sig = method_info.signature
+    class_pkg = '.'.join(class_name.split('.')[:-1])
+    class_short_name = class_name.split('.')[-1]
+
+    thread_and_pkg = f"Thread-{event.thread}:  {class_pkg}\n"
+    call_str = f"  {class_short_name}.{method_name}(\n"
+    param_str = f"  {method_sig}"
+
+    #call_str = f"{jvm_to_java(class_name)}.{method_name}{method_sig}"
+    return ''.join([thread_and_pkg, call_str, param_str])
+
 
 class BreakpointInfo():
 
-    def __init__(self, dbg, class_signature=None, method_name=None, method_signature=None, callback=None, bytecode_index=0, count=1):
+    def __init__(self, dbg, class_signature=None, method_name=None, method_signature=None, callback=None, bytecode_index=0, skip_count=0, userdata=None):
         self.dbg = dbg
 
         self.callback = callback
         if not self.callback:
-            self.callback = noop
+            self.callback = std_break_event
         
         self.class_signature = class_signature
         self.class_info = None
@@ -52,12 +116,43 @@ class BreakpointInfo():
         self.method_info = None
         self.bytecode_index = bytecode_index
 
-        # How many times to listen for breakpoint event
-        self.count = count
+        # How many times to skip the breakpoint.
+        self.skip_count = skip_count + 1
+
+        self.userdata = userdata
+
+        ##### Experimental Things #####
+
+        # An async event that can be awaited from the handler
+        # and set from outside to progress execution. This gets
+        # weird when you use stepping in combination with the
+        # event, so its experiemental for now.
+
+        self.aevent = asyncio.Event()
 
     
     def set_callback(self, callback):
+        """Set the breakpoint callback.
+
+        The callback is an async callable that includes
+        the event, the event's composite, and args. args
+        is a tuple with the sole value of the associated
+        BreakpointInfo object. To pass user specific data
+        see the BreakpointInfo.set_userdata() call.
+
+        Example Callback Function:
+
+        async def handle_breakpoint(event, composite, args):
+            bp, = args
+            print(f"{break_location_str(bp.dbg, event)}")
+
+        """
         self.callback = callback
+        return self
+    
+
+    def set_userdata(self, userdata):
+        self.userdata = userdata
         return self
 
 
@@ -92,9 +187,9 @@ class BreakpointInfo():
         mod = self.dbg.jdwp.EventRequest.SetLocationOnlyModifier()
         mod.loc = loc
         evt_req.modifiers.append(mod)
-        if self.count > 0:
+        if self.skip_count > 0:
             mod = self.dbg.jdwp.EventRequest.SetCountModifier()
-            mod.count = Int(self.count)
+            mod.count = Int(self.skip_count)
             evt_req.modifiers.append(mod)
 
         reqid, error_code = await self.dbg.jdwp.EventRequest.Set(evt_req)
@@ -150,3 +245,58 @@ class BreakpointInfo():
 
         print(f"Deferring breakpoint for: {jvm_to_java(self.class_signature)}.{self.method_name}{self.method_signature} (reqid {reqid}).")
         self.dbg.jdwp.register_event_handler(reqid, BreakpointInfo._handle_class_prepare, (self, ))
+
+
+    async def location_str(self, event):
+        return await break_location_str(self.dbg, event)
+
+    
+    async def wait(self):
+        await self.aevent.wait()
+        # Reset event.
+        self.aevent = asyncio.Event()
+    
+
+    def poke(self):
+        self.aevent.set()
+
+
+    async def single_step(self, threadID, step_depth, step_handler=None):
+        evt_req = self.dbg.jdwp.EventRequest.SetRequest()
+        evt_req.eventKind = Byte(Jdwp.EventKind.SINGLE_STEP)
+        evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
+
+        mod = self.dbg.jdwp.EventRequest.SetStepModifier()
+        mod.thread = ThreadID(threadID)
+        mod.size = Int(Jdwp.StepSize.MIN) # LINE is multiple bytecode lines
+        mod.depth = Int(step_depth) #Jdwp.StepDepth.INTO
+        evt_req.modifiers.append(mod)
+
+        # TODO: Do we want to enable multi-step?
+        #mod = dbg.jdwp.EventRequest.SetCountModifier()
+        #mod.count = Int(1)
+        #evt_req.modifiers.append(mod)
+
+        reqid, error_code = await self.dbg.jdwp.EventRequest.Set(evt_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to setup step: {Jdwp.Error.string[error_code]}")
+            return
+        handler = step_handler
+        if not handler:
+            handler = std_step_event
+        self.dbg.jdwp.register_event_handler(reqid, handler, (self,))
+
+
+    async def step_into(self, threadID, step_handler=None):
+        await self.single_step(threadID, Jdwp.StepDepth.INTO, step_handler)
+        await self.dbg.resume_vm()
+
+
+    async def step_over(self, threadID, step_handler=None):
+        await self.single_step(threadID, Jdwp.StepDepth.OVER, step_handler)
+        await self.dbg.resume_vm()
+
+
+    async def step_out(self, threadID, step_handler=None):
+        await self.single_step(threadID, Jdwp.StepDepth.OUT, step_handler)
+        await self.dbg.resume_vm()

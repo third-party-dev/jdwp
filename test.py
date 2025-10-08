@@ -16,7 +16,6 @@ import thirdparty.sandbox as __sandbox__
 from thirdparty.sandbox.repl import Repl
 import thirdparty.jvmdebugger
 from thirdparty.jvmdebugger.state import *
-
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 
@@ -45,42 +44,50 @@ await dbg.cli_frame_values(26092, 131072)
 await dbg.cli_object_values()
 '''
 
+class DumbObject():
+    def __repr__(self):
+        return '\n'.join(self.__dict__.keys())
+
 async def __thirdparty_sandbox_async_def(): pass
 
-# Keep these in global scope for remote REPL accessibility.
+# We're keeping jdwp, dbg, and dbg_state in global scope so
+# they remain accessible to REPL mechanisms.
 jdwp = None
-
-# Create debugger instance.
 dbg = thirdparty.jvmdebugger.JvmDebugger()
-# Save reference to state for potential hot reload.
 dbg_state = dbg.state
-   
+
+bp = DumbObject()
 
 async def main():
     global dbg
     global jdwp
+    global bp
 
     print("Connecting debugger to localhost:8700")
     await dbg.start('127.0.0.1', 8700)
+    jdwp = dbg.jdwp
     dbg.print_summary()
 
-    print("Setting up deferred breakpoint.")
+    async def handle_breakpoint(event, composite, args):
+        bp, = args
+        print(f"{bp.location_str(event)}")
+        
+        await bp.wait()
+        await bp.dbg.resume_vm()
 
+    bp.fetchQuote = dbg.create_breakpoint(**{
+        'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
+        'method_name': 'fetchQuote',
+        'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
+    }, callback=handle_breakpoint)
+    #await bp.fetchQuote.set_breakpoint()
 
-    class_signature = 'Lsh/kau/playground/quoter/QuotesRepoImpl;'
-    #method_signature = ('fetchQuote', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
-    method_signature = ('quoteForTheDay', '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;')
-
-    async def handle_breakpoint(*args, **kwargs):
-        print("HERE WE ARE!")
-
-    await dbg.create_breakpoint(
-        class_signature='Lsh/kau/playground/quoter/QuotesRepoImpl;',
-        method_name='quoteForTheDay',
-        method_signature='(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
-        callback=handle_breakpoint,
-        count=3,
-    ).set_breakpoint()
+    bp.quoteForTheDay = dbg.create_breakpoint(**{
+        'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
+        'method_name': 'quoteForTheDay',
+        'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
+    }, callback=None)
+    await bp.quoteForTheDay.set_breakpoint()
 
     await dbg.resume_vm()
 
@@ -93,16 +100,9 @@ async def main():
 
 
 async def main_with_sandbox():
-    #__sandbox__.hot_reload_module(thirdparty.jvmdebugger)
-    # Note: Need to send the globals() from this scope or we get the module's globals().
-    #sandbox_coro = __sandbox__.start_sandbox(
-    #  repl_socket_path="/tmp/repl.sock", repl_namespace=globals(),
-    #  exec_socket_path="/tmp/exec.sock", exec_namespace=globals(),
-    #  #dict_socket_path="/tmp/dict.sock", dict_shared_dict=db,
-    #)
-    #sandbox_task = asyncio.create_task(sandbox_coro)
-    repl_task = asyncio.create_task(Repl(namespace=globals()).start_repl_server(socket_path="/tmp/asyncrepl.sock"))
-    # TODO: Consider a event handler for when hot reload occurs to actually update references?!
+    socket_path = "/tmp/asyncrepl.sock"
+    repl_coro = Repl(namespace=globals()).start_repl_server(socket_path=socket_path)
+    repl_task = asyncio.create_task(repl_coro)
     main_task = asyncio.create_task(main())
     await asyncio.gather(repl_task, main_task)
 
@@ -117,137 +117,29 @@ if __name__ == "__main__":
     asyncio.run(main_with_sandbox())
 
 
+'''
 
+    ##### Misc Notes #####
+
+
+    pprint(list(fuzzyfinder('playground', dbg.classes_by_signature)))
+
+
+    # Watch for new Throwable classes.
+    print("EventRequest.Set(CLASS_PREPARE)")
+    evt_req = jdwp.EventRequest.SetRequest()
+    evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
+    evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
+    print("  ClassMatch = \"java.lang.Throwable\"")
+    mod = jdwp.EventRequest.SetClassMatchModifier()
+    mod.classPattern = String("java.lang.Throwable")
+    evt_req.modifiers.append(mod)
+    mod = jdwp.EventRequest.SetCountModifier()
+    mod.count = Int(1)
+    evt_req.modifiers.append(mod)
+    throwable_reqid = await jdwp.EventRequest.Set(evt_req)
+    print(f" RequestID = {throwable_reqid}")
 
 '''
 
-pprint(list(fuzzyfinder('playground', dbg.classes_by_signature)))
 
-
-async def dothing():
-  await jdwp.VirtualMachine.Resume()
-asyncio.get_event_loop().create_task(dothing())
-
-
-async def dothing():
-  dbg = thirdparty.jvmdebugger.JvmDebugger(dbg_state)
-  await dbg.resume_vm2()
-asyncio.get_event_loop().create_task(dothing())
-'''
-
-
-
-
-
-
-
-
-
-
-    # # Watch for new Throwable classes.
-    # print("EventRequest.Set(CLASS_PREPARE)")
-    # evt_req = jdwp.EventRequest.SetRequest()
-    # evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
-    # evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
-    # print("  ClassMatch = \"java.lang.Throwable\"")
-    # mod = jdwp.EventRequest.SetClassMatchModifier()
-    # mod.classPattern = String("java.lang.Throwable")
-    # evt_req.modifiers.append(mod)
-    # mod = jdwp.EventRequest.SetCountModifier()
-    # mod.count = Int(1)
-    # evt_req.modifiers.append(mod)
-    # throwable_reqid = await jdwp.EventRequest.Set(evt_req)
-    # print(f" RequestID = {throwable_reqid}")
-
-
-    # # print("EventRequest.Set(EXCEPTION)")
-    # # evt_req = jdwp.EventRequest.SetRequest()
-    # # evt_req.eventKind = Byte(Jdwp.EventKind.EXCEPTION)
-    # # evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
-    # # mod = jdwp.EventRequest.SetExceptionOnlyModifier()
-    # # # TODO: Get this value from AllClassesWithGeneric ?
-    # # mod.exceptionOrNull = ReferenceTypeID(0) #0x229
-    # # mod.caught = Boolean(0)
-    # # mod.uncaught = Boolean(0)
-    # # evt_req.modifiers.append(mod)
-    # # exception_reqid = await jdwp.EventRequest.Set(evt_req)
-
-
-    # # print("EventRequest.Clear()")
-    # # evt_req = jdwp.EventRequest.ClearRequest()
-    # # evt_req.eventKind = Byte(EventKind.EXCEPTION)
-    # # evt_req.requestID = exception_reqid
-    # # await jdwp.EventRequest.Clear(evt_req)
-
-
-    # # Get all current class paths.
-    # print("VirtualMachine.ClassPaths()")
-    # classpath_reply = await jdwp.VirtualMachine.ClassPaths()
-    # for p in classpath_reply.classpaths:
-    #   db['classpaths'][p] = True
-    #   #print(f"  {p}")
-    # print(f"  Classpaths: {len(db['classpaths'])}")
-    # for p in classpath_reply.bootclasspaths:
-    #   db['bootclasspaths'][p] = True
-    #   #print(f"  {p}")
-    # print(f"  BootClasspaths: {len(db['bootclasspaths'])}")
-
-
-    # # print("VirtualMachine.Resume()")
-    # # await jdwp.VirtualMachine.Resume()
-
-
-'''
-class Capabilities():
-    pass
-
-class Version():
-  # print("VirtualMachine.Version()")
-  # db['versions'] = versions
-  # print(f"  description = {versions.description}")
-  # print(f"  jdwpMajor = {versions.jdwpMajor}")
-  # print(f"  jdwpMinor = {versions.jdwpMinor}")
-  # print(f"  vmVersion = {versions.vmVersion}")
-  # print(f"  vmName = {versions.vmName}")
-  pass
-
-
-
-class ModuleInfo():
-    pass
-
-class InstanceInfo():
-    pass
-
-class InterfaceInfo():
-    pass
-
-class FieldInfo():
-    # values? ... via GetValues()
-
-    # FieldAccess ??
-    # FieldModification ??
-    pass
-
-class MethodInfo():
-    pass
-
-
-
-class GroupInfo():
-    pass
-
-class ObjectInfo():
-    pass
-
-class EventRequest():
-    pass
-
-class Breakpoint():
-    pass
-
-# suspended threads with lists of frames
-
-class FrameInfo():
-    pass
-'''
