@@ -79,15 +79,15 @@ async def main():
         'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
         'method_name': 'fetchQuote',
         'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
-    }, callback=handle_breakpoint)
-    #await bp.fetchQuote.set_breakpoint()
+    }, callback=None)
+    await bp.fetchQuote.set_breakpoint()
 
     bp.quoteForTheDay = dbg.create_breakpoint(**{
         'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
         'method_name': 'quoteForTheDay',
         'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
     }, callback=None)
-    await bp.quoteForTheDay.set_breakpoint()
+    #await bp.quoteForTheDay.set_breakpoint()
 
     await dbg.resume_vm()
 

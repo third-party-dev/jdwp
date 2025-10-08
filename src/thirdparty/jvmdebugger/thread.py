@@ -67,6 +67,10 @@ class FrameInfo():
         self.here = ""
     
     async def _update(self):
+
+        # TODO: Flesh out location?
+
+
         # TODO: Consider caching?
         #print(f"UPDATING FRAME {self} {self.frameID}")
 
