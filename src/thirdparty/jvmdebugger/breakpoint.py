@@ -6,6 +6,7 @@ from thirdparty.jdwp import (
 
 import thirdparty.dalvik.dex
 from thirdparty.jvmdebugger.state import *
+from thirdparty.jvmdebugger.thread import ThreadInfo
 
 
 import thirdparty.sandbox as __sandbox__
@@ -54,7 +55,8 @@ async def std_break_event(event, composite, args):
     bp, = args
     
     await bp.dbg.disable_breakpoint_event(event.requestID)
-    await bp.dbg.thread(event.thread)._update(event)
+    thread = await bp.dbg.thread(event.thread)
+    thread.event_args(event, composite, args)
 
     print(f"Bkpt@ {await bp.location_str(event)}")
     print(await instruction_str(bp.dbg, event))
@@ -73,8 +75,9 @@ async def std_step_event(event, composite, args):
     bp, = args
 
     await bp.dbg.disable_step_event(event.requestID)
-    await bp.dbg.threads_by_id[event.thread]._update(event)
-
+    thread = await bp.dbg.thread(event.thread)
+    thread.event_args(event, composite, args)
+    
     print(f"Step@ {await bp.location_str(event)}")
     print(await instruction_str(bp.dbg, event))
 
@@ -263,13 +266,17 @@ class BreakpointInfo():
         self.aevent.set()
 
 
-    async def single_step(self, threadID, step_depth, step_handler=None):
+    async def single_step(self, thread, step_depth, step_handler=None):
+
+        if isinstance(thread, ThreadInfo):
+            thread = thread.threadID
+
         evt_req = self.dbg.jdwp.EventRequest.SetRequest()
         evt_req.eventKind = Byte(Jdwp.EventKind.SINGLE_STEP)
         evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
 
         mod = self.dbg.jdwp.EventRequest.SetStepModifier()
-        mod.thread = ThreadID(threadID)
+        mod.thread = ThreadID(thread)
         mod.size = Int(Jdwp.StepSize.MIN) # LINE is multiple bytecode lines
         mod.depth = Int(step_depth) #Jdwp.StepDepth.INTO
         evt_req.modifiers.append(mod)
@@ -289,16 +296,16 @@ class BreakpointInfo():
         self.dbg.jdwp.register_event_handler(reqid, handler, (self,))
 
 
-    async def step_into(self, threadID, step_handler=None):
-        await self.single_step(threadID, Jdwp.StepDepth.INTO, step_handler)
+    async def step_into(self, thread, step_handler=None):
+        await self.single_step(thread, Jdwp.StepDepth.INTO, step_handler)
         await self.dbg.resume_vm()
 
 
-    async def step_over(self, threadID, step_handler=None):
-        await self.single_step(threadID, Jdwp.StepDepth.OVER, step_handler)
+    async def step_over(self, thread, step_handler=None):
+        await self.single_step(thread, Jdwp.StepDepth.OVER, step_handler)
         await self.dbg.resume_vm()
 
 
-    async def step_out(self, threadID, step_handler=None):
-        await self.single_step(threadID, Jdwp.StepDepth.OUT, step_handler)
+    async def step_out(self, thread, step_handler=None):
+        await self.single_step(thread, Jdwp.StepDepth.OUT, step_handler)
         await self.dbg.resume_vm()

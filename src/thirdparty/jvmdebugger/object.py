@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from typing import Optional, List, Tuple
 
 
-
 class ObjectInfo():
     def __init__(self, dbg, object_id: int):
         self.dbg = dbg
@@ -22,8 +21,8 @@ class ObjectInfo():
         self.fields = {}
 
 
-    async def _update(self):
-        print(f"ObjectInfo({self.object_id})._update()")
+    async def load(self):
+        #print(f"ObjectInfo({self.object_id}).load()")
 
         # Get the object type
         reftype_reply, error_code = await self.dbg.jdwp.ObjectReference.ReferenceType(ObjectID(self.object_id))
@@ -66,36 +65,33 @@ class ObjectInfo():
         return self
 
 
+    # Dereference a member of the object.
     async def deref(self, ref):
+        if isinstance(ref, ObjectInfo) or isinstance(ref, int):
+            return await self.dbg.deref(ref)
+
         if isinstance(ref, str):
             for (field_id, field_name), field_value in self.fields.items():
                 if ref == field_name:
                     if field_value.tag == Jdwp.Tag.OBJECT:
-                        return await self.dbg.object_ref(field_value.value)._update()
-                    # TODO: We can handle other types like strings here too.
-                    return field_value
-        elif isinstance(ref, int):
-            for (field_id, field_name), field_value in self.fields.items():
-                if ref == field_id:
-                    if field_value.tag == Jdwp.Tag.OBJECT:
-                        return await self.dbg.object_ref(field_value.value)._update()
+                        return await self.dbg.deref(field_value.value)
+                    
                     # TODO: We can handle other types like strings here too.
                     return field_value
 
 
+    # Generate string output of object.
     def __repr__(self):
+        
         try:
             if not self.class_info:
-                return f'ObjectInfo(object_id {self.object_id} [not updated])'
+                return f'ObjectInfo(object_id {self.object_id} [unloaded])'
 
-            #breakpoint()
-            summary = [
-                f'{self.class_info.signature} (classID {self.class_info.typeID})',
-                f'  Methods:',
-            ]
+            summary = [f'{self.class_info.signature} (classID {self.class_info.typeID})']
 
-            for method_id, method in self.class_info.methods_by_id.items():
-                summary.append(f'    - {method.name}{method.signature}')
+            summary.append(f'\n  Methods: [skipped]')
+            #for method_id, method in self.class_info.methods_by_id.items():
+            #    summary.append(f'    - {method.name}{method.signature}')
             
             summary.append(f'\n  Fields:')
 

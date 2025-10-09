@@ -119,11 +119,26 @@ class JvmDebugger():
         print("Done fetching classes.")
 
 
-    def object_ref(self, object_id):
-
+    def object_info(self, object_id):
         if object_id in self.objects_by_id:
             return self.objects_by_id[object_id]
         return ObjectInfo(self, object_id)
+
+
+    async def deref(self, obj):
+        """Given an object_id or ObjectInfo, returns a dereferenced
+           version in the form of a loaded ObjectInfo instance.
+
+          Args:
+            obj (int): Object ID.
+            obj (ObjectInfo): ObjectInfo instance.
+
+          Returns: Loaded ObjectInfo()
+        """
+        if not isinstance(obj, ObjectInfo):
+            obj = self.object_info(obj)
+        return await obj.load()
+
 
     @staticmethod
     async def handle_class_prepare(event, composite, dbg):
@@ -373,8 +388,10 @@ class JvmDebugger():
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: Failed to get all threads: {Jdwp.Error.string[error_code]}")
             return
-        for t in thread_reply.threads:
-            self.threads_by_id[t] = ThreadInfo(self, t)
+        for thread_id in thread_reply.threads:
+            # Caches itself in constructor.
+            # Note: We don't load threads until we break.
+            ThreadInfo(self, thread_id)
 
 
     async def resume_vm(self):
@@ -395,16 +412,26 @@ class JvmDebugger():
         print(f"Thread Count: {len(self.classes_by_id)}")
 
 
+    async def thread(self, thread):
+        # Only call when broke.
+        if not isinstance(thread, ThreadInfo):
+            try:
+                thread = self.threads_by_id[thread]
+            except KeyError:
+                thread = ThreadInfo(self, thread)
+
+        return await thread.load()
 
 
+    async def frame(self, thread, frame=0):
+        # Only call when broke.
+        # thread can be ID or ThreadInfo
+        if not isinstance(thread, ThreadInfo):
+            thread = await self.thread(thread)
+        return await thread.frame(frame)
 
-    def slot(self, thread_id, slot_idx=0, frame_idx=0):
-        return self.thread(thread_id).frame(frame_idx).slot(slot_idx)
 
+    # Note: async def slot() is not useful at the moment.
 
-    def thread(self, thread_id):
-        try:
-            return self.threads_by_id[thread_id]
-        except KeyError:
-            return None
+    
     

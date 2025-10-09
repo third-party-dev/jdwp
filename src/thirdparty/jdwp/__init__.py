@@ -117,22 +117,22 @@ class EventKind():
     VM_DISCONNECTED = 100 # unsent on JDWP
 
 class Tag():
-    ARRAY = 0x5b
-    BYTE = 0x42
-    CHAR = 0x43
-    OBJECT = 0x4c  # 76
-    FLOAT = 0x46
-    DOUBLE = 0x44
-    INT = 0x49
-    LONG = 0x4a
-    SHORT = 0x53
-    VOID = 0x56
-    BOOLEAN = 0x5a
-    STRING = 0x73
-    THREAD = 0x74
-    THREAD_GROUP = 0x67
-    CLASS_LOADER = 0x6c
-    CLASS_OBJECT = 0x63
+    ARRAY = 0x5b         # '[' 91
+    BYTE = 0x42          # 'B' 66
+    CHAR = 0x43          # 'C' 67
+    OBJECT = 0x4c        # 'L' 76
+    FLOAT = 0x46         # 'F' 70
+    DOUBLE = 0x44        # 'D' 68
+    INT = 0x49           # 'I' 73
+    LONG = 0x4a          # 'J' 74
+    SHORT = 0x53         # 'S' 83
+    VOID = 0x56          # 'V' 86
+    BOOLEAN = 0x5a       # 'Z' 90
+    STRING = 0x73        # 's' 115
+    THREAD = 0x74        # 't' 116
+    THREAD_GROUP = 0x67  # 'g' 103
+    CLASS_LOADER = 0x6c  # 'l' 108
+    CLASS_OBJECT = 0x63  # 'c' 99
 
     u0 = [VOID]
     u8 = [BYTE, BOOLEAN]
@@ -189,6 +189,8 @@ class Tag():
 
 class Error():
     NONE = 0
+    INVALID_SLOT = 35
+    TYPE_MISMATCH = 34
 
     string = {
         0: "NONE",
@@ -316,8 +318,9 @@ class Jdwp():
         while True:
             data, pkt, flags, error_code = await self.recv()
 
-            if error_code != 0:
-                print(f"JDWP error code {self.Error.string[error_code]} [{error_code}]\nData: {data.hex()}")
+            # Callers should now be handling errors.
+            #if error_code != 0:
+            #    print(f"JDWP error code {self.Error.string[error_code]} [{error_code}]\nData: {data.hex()}")
 
             if flags & Jdwp.REPLY_PACKET:
                 fut = self.pending_requests.pop(pkt, None)
@@ -450,7 +453,7 @@ class TaggedObjectID(BaseModel):
 
     def from_bytes(self, data, offset=0) -> Tuple['TaggedObjectID', int]:
         self.tag, offset = Jdwp.parse_byte(data, offset, Byte)
-        if tag not in Tag.objs:
+        if self.tag not in Tag.objs:
             raise RuntimeError(f"TaggedObjectID tagged as non-object. (Tag: {tag})")
         # Note: Does this need to be some kind of union?
         self.objectID, offset = Jdwp.parse_long(data, offset, Long)
