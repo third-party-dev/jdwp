@@ -85,9 +85,10 @@ class FrameInfo():
     async def load(self):
 
         # TODO: Flesh out location?
-        await self.dbg.update_class_methods(self.location.classID)
+        #await self.dbg.update_class_methods(self.location.classID)
+        class_info = await self.dbg.class_info(self.location.classID)
 
-        class_info = self.dbg.classes_by_id[self.location.classID]
+        #class_info = self.dbg.classes_by_id[self.location.classID]
         method_info = class_info.methods_by_id[self.location.methodID]
         self.loc_class = class_info.signature
         self.loc_method = f'{method_info.name}{method_info.signature}'

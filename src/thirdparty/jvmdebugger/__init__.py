@@ -140,20 +140,7 @@ class JvmDebugger():
         return await obj.load()
 
 
-    @staticmethod
-    async def handle_class_prepare(event, composite, dbg):
-        """Callback for JvmDebugger.enable_class_prepare_events()"""
-        if event.typeID not in dbg.classes_by_id:
-            classInfo = ClassInfo()
-            classInfo.refTypeTag = event.refTypeTag
-            classInfo.typeID = event.typeID
-            classInfo.signature = event.signature
-            #classInfo.generic = # TODO: Is there an event with class prepare with generic?
-            # TODO: Do we see if it already exists first?
-            dbg.classes_by_id[classInfo.typeID] = classInfo
-            dbg.classes_by_signature[classInfo.signature] = classInfo
-            # TODO: Implement way to show first A chars and last B chars in X width.
-            #print(f"CLASS_PREPARE: {classInfo.signature[:60]}")
+    
 
 
     async def enable_class_prepare_events(self):
@@ -266,30 +253,7 @@ class JvmDebugger():
         await self.jdwp.EventRequest.Clear(evt_req)
 
 
-    async def update_class_methods(self, classID: ReferenceTypeID):
-        methods_reply, error_code = await self.jdwp.ReferenceType.Methods(classID)
-        if error_code != Jdwp.Error.NONE:
-            print(f"ERROR: Failed to get class methods: {Jdwp.Error.string[error_code]}")
-            return
-        
-        # TODO: Potential KeyError
-        classInfo = self.classes_by_id[classID]
-
-        for method in methods_reply.declared:
-            methodInfo = MethodInfo()
-            methodInfo.methodID = method.methodID
-            methodInfo.name = method.name
-            methodInfo.signature = method.signature
-            methodInfo.modBits = method.modBits
-
-            #print(f"METHOD SIGNATURE {methodInfo.methodID}:  {methodInfo.name}  {methodInfo.signature}")
-        
-            # TODO: Verify it doesn't already exist?
-            classInfo.methods_by_id[methodInfo.methodID] = methodInfo
-            # Note: method name or signature may be ambiguous.
-            method_signature = (methodInfo.name, methodInfo.signature)
-            #print(f"Inserting method_signature {method_signature}")
-            classInfo.methods_by_signature[method_signature] = methodInfo
+    
 
 
     async def load_method_bytecode(self, classID, methodID):
@@ -314,25 +278,7 @@ class JvmDebugger():
         return None
 
 
-    async def update_class_fields(self, classID):
-        if classID in self.classes_by_id:
-            classInfo = self.classes_by_id[classID]
-
-            if not classInfo.fields_loaded:
-                fields_reply, error_code = await self.jdwp.ReferenceType.Fields(ReferenceTypeID(classID))
-                if error_code != Jdwp.Error.NONE:
-                    print(f"ERROR: Failed to get class fields: {Jdwp.Error.string[error_code]}")
-                    return
-                for entry in fields_reply.declared:
-                    field = FieldInfo()
-                    field.fieldID = entry.fieldID
-                    field.name = entry.name
-                    field.signature = entry.signature
-                    field.modBits = entry.modBits
-                    classInfo.fields_by_id[field.fieldID] = field
-                    classInfo.fields_by_signature[(field.name, field.signature)] = field
-                    #print(f"CLASS({classID}) FIELD: {entry}")
-                classInfo.fields_loaded = True
+    
 
 
     def create_breakpoint(self, **kwargs):
@@ -362,6 +308,30 @@ class JvmDebugger():
         return BreakpointInfo(self, **kwargs)
 
 
+    @staticmethod
+    async def handle_class_prepare(event, composite, dbg):
+        """Callback for JvmDebugger.enable_class_prepare_events()"""
+        if event.typeID not in dbg.classes_by_id:
+
+            # Unloaded until we think we'll deref.
+            # TODO: Consider registering for generic event too.
+            dbg.classes_by_id[event.typeID] = dbg.create_class_info(\
+                event.typeID,
+                typeTag=event.refTypeTag,
+                signature=event.signature)
+
+            # classInfo = ClassInfo()
+            # classInfo.refTypeTag = event.refTypeTag
+            # classInfo.typeID = event.typeID
+            # classInfo.signature = event.signature
+            # #classInfo.generic = # TODO: Is there an event with class prepare with generic?
+            # # TODO: Do we see if it already exists first?
+            # dbg.classes_by_id[classInfo.typeID] = classInfo
+            # dbg.classes_by_signature[classInfo.signature] = classInfo
+            # # TODO: Implement way to show first A chars and last B chars in X width.
+            # #print(f"CLASS_PREPARE: {classInfo.signature[:60]}")
+
+
     async def request_all_classes(self):
         #print("VirtualMachine.AllClassesWithGeneric()")
         all_classes_reply, error_code = await self.jdwp.VirtualMachine.AllClassesWithGeneric()
@@ -372,15 +342,69 @@ class JvmDebugger():
         #db['all_classes_reply1'] = all_classes_reply
         #i = 0
         for clazz in all_classes_reply.classes:
-            classInfo = ClassInfo()
-            classInfo.refTypeTag = clazz.refTypeTag
-            classInfo.typeID = clazz.typeID
-            classInfo.signature = clazz.signature
-            classInfo.generic = clazz.genericString
-            # TODO: Do we see if it already exists first?
-            self.classes_by_id[classInfo.typeID] = classInfo
-            self.classes_by_signature[classInfo.signature] = classInfo        
-        #print(f"  Classes returned: {len(dbg.classes_by_id)}")
+
+            # Unloaded until we think we'll deref.
+            self.classes_by_id[clazz.typeID] = self.create_class_info(\
+                clazz.typeID,
+                typeTag=clazz.refTypeTag,
+                signature=clazz.signature,
+                generic=clazz.genericString)
+
+            # classInfo = ClassInfo()
+            # classInfo.refTypeTag = clazz.refTypeTag
+            # classInfo.typeID = clazz.typeID
+            # classInfo.signature = clazz.signature
+            # classInfo.generic = clazz.genericString
+            # # TODO: Do we see if it already exists first?
+            # self.classes_by_id[classInfo.typeID] = classInfo
+            # self.classes_by_signature[classInfo.signature] = classInfo        
+        
+
+    async def get_class_id(self, object_id):
+        # Get the object type
+        reftype_reply, error_code = await self.jdwp.ObjectReference.ReferenceType(ObjectID(object_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to get object type: {Jdwp.Error.string[error_code]}")
+            return None
+
+        return reftype_reply.typeID
+
+
+    async def get_super_id(self, class_id):
+        # Is there a super class?
+        super_class_id, error_code = await self.jdwp.ClassType.Superclass(ClassID(class_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to get superclass: {Jdwp.Error.string[error_code]}")
+            return None
+        return super_class_id
+
+
+
+    def create_class_info(self, typeID, typeTag=None, signature=None, generic=None):
+        if typeID in self.classes_by_id:
+            return
+
+        class_info = ClassInfo(self, typeID)
+
+        if typeTag:
+            class_info.refTypeTag = typeTag
+
+        if signature:
+            class_info.signature = signature
+
+        if generic:
+            class_info.generic = generic
+
+        return class_info
+
+
+    async def class_info(self, clazz):
+        clazz_orig = clazz
+        if isinstance(clazz, int):
+            clazz = self.classes_by_id[clazz]
+        return await clazz.load()
+
+        
 
 
     async def request_all_threads(self):
@@ -433,5 +457,17 @@ class JvmDebugger():
 
     # Note: async def slot() is not useful at the moment.
 
-    
+    async def get_object_class_info(self, object_id):
+        # Get the object type
+        reftype_reply, error_code = await self.jdwp.ObjectReference.ReferenceType(ObjectID(object_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to get object type: {Jdwp.Error.string[error_code]}")
+            return
+
+        # Get the class_info
+        if reftype_reply.typeID not in self.classes_by_id:
+            print(f"ERROR: Class id not found: {reftype_reply.typeID}")
+            return
+
+        return self.classes_by_id[reftype_reply.typeID]
     

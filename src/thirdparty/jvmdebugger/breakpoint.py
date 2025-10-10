@@ -84,9 +84,10 @@ async def std_step_event(event, composite, args):
 
 async def break_location_str(dbg, event):
     # Ensure we have the methods for the target class.
-    await dbg.update_class_methods(event.location.classID)
+    #await dbg.update_class_methods(event.location.classID)
+    class_info = await dbg.class_info(event.location.classID)
 
-    class_info = dbg.classes_by_id[event.location.classID]
+    #class_info = dbg.classes_by_id[event.location.classID]
     class_name = jvm_to_java(class_info.signature)
     method_info = class_info.methods_by_id[event.location.methodID]
     method_name = method_info.name
@@ -168,8 +169,8 @@ class BreakpointInfo():
             await self._defer_breakpoint()
         else:
             # Class loaded, lets do it now.
-            await self.dbg.update_class_methods(self.class_info.typeID)
-            self.class_info = self.dbg.classes_by_signature[self.class_signature]
+            #await self.dbg.update_class_methods(self.class_info.typeID)
+            self.class_info = await self.dbg.classes_by_signature[self.class_signature].load()
             if self.method_signature in self.class_info.methods_by_signature:
                 self.method_info = self.class_info.methods_by_signature[self.method_signature]
                 await self._enable_breakpoint()
@@ -221,14 +222,15 @@ class BreakpointInfo():
         await self.dbg.disable_class_prepare_event(event.requestID)
 
         # Get the methods for the target class.
-        await self.dbg.update_class_methods(event.typeID)
+        self.class_info = await self.dbg.class_info(event.typeID)
+        #await self.dbg.update_class_methods(event.typeID)
 
-        if self.class_signature in self.dbg.classes_by_signature:
-            self.class_info = self.dbg.classes_by_signature[self.class_signature]
-            if (self.method_name, self.method_signature) in self.class_info.methods_by_signature:
-                self.method_info = self.class_info.methods_by_signature[(self.method_name, self.method_signature)]
-                
-                await self._enable_breakpoint()
+        #if self.class_signature in self.dbg.classes_by_signature:
+        #    self.class_info = self.dbg.classes_by_signature[self.class_signature]
+        if (self.method_name, self.method_signature) in self.class_info.methods_by_signature:
+            self.method_info = self.class_info.methods_by_signature[(self.method_name, self.method_signature)]
+            
+            await self._enable_breakpoint()
 
 
     async def _defer_breakpoint(self):

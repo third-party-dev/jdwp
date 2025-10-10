@@ -6,6 +6,79 @@ from thirdparty.jdwp import (
 from thirdparty.jvmdebugger.state import *
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
+import pdb
+
+'''
+We have base classes and super classes. Since java is single inheritance
+we should be able to have a sorted linear array of types in an array from
+actual type up the class tree (i.e. super classes).
+
+Field values are tied to the class they are defined in. A parent class and
+a child class can have fields with the same name that are distinct in
+memory. This can effectively "hide" a parent field from child field users.
+
+To unhide these fields and their values, we need to not merge our fields
+dictionary into a single flat structure. We need to associate each field
+with its class_info type, but still be able to dump everything at once.
+'''
+
+
+class SubobjectInfo():
+    def __init__(self, dbg, object_id: int, class_id: int):
+        self.dbg = dbg
+        self.object_id = object_id
+        self.class_id = class_id
+
+        self.class_info = None
+        self.fields = {}
+
+
+    async def load(self):
+
+        # Get _loaded_ class_info.
+        if not self.class_info:
+            #class_id = await self.dbg.get_class_id(self.object_id)
+            self.class_info = await self.dbg.class_info(self.class_id)
+        
+        # Get object values
+        getvalues_req = self.dbg.jdwp.ObjectReference.GetValuesRequest()
+        getvalues_req.objectid = ObjectID(self.object_id)
+        
+        field_ids = [*self.class_info.fields_by_id.keys()]
+        for field_id in field_ids:
+            getvalues_req.fields.append(FieldID(field_id))
+        getvalues_reply, error_code = await self.dbg.jdwp.ObjectReference.GetValues(getvalues_req)
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to get object values: {Jdwp.Error.string[error_code]}")
+
+        # Map object values to field names.
+        for idx, field_id in enumerate(field_ids):
+            field_info = self.class_info.fields_by_id[field_id]
+            field_value = getvalues_reply.values[idx]
+            field_tup = (field_info.fieldID, field_info.name)
+            self.fields[field_tup] = field_value
+
+        return self
+
+
+    def __repr__(self):
+        try:
+            summary = [f'  {self.class_info.signature} (classID {self.class_info.typeID})']
+
+            summary.append(f'\n    Methods: [skipped]')
+            #for method_id, method in self.class_info.methods_by_id.items():
+            #    summary.append(f'    - {method.name}{method.signature}')
+            
+            summary.append(f'\n    Fields:')
+
+            for (field_id, field_name), field_value in self.fields.items():
+                field_info = self.class_info.fields_by_id[field_id]
+                summary.append(f'      - {field_info.signature} {field_name} = {Jdwp.Tag.type_str(field_value.tag)}({field_value.value})')
+                #summary.append(f'      - {field_name} = {field_value}')
+
+            return '\n'.join(summary)
+        except Exception as e:
+            return f"ObjectInfo(ERROR: {e})"
 
 
 class ObjectInfo():
@@ -16,52 +89,26 @@ class ObjectInfo():
         if self.object_id not in self.dbg.objects_by_id:
             self.dbg.objects_by_id[self.object_id] = self
 
-        self.class_info = None
-
-        self.fields = {}
+        self.subobjects = []
+        # Subobjects lookup by class id
+        self.subobjects_by_id = {}
 
 
     async def load(self):
-        #print(f"ObjectInfo({self.object_id}).load()")
+        self.subobjects = []
+        self.subobjects_by_id = {}
 
-        # Get the object type
-        reftype_reply, error_code = await self.dbg.jdwp.ObjectReference.ReferenceType(ObjectID(self.object_id))
-        if error_code != Jdwp.Error.NONE:
-            print(f"ERROR: Failed to get object type: {Jdwp.Error.string[error_code]}")
-            return
-
-        # Get the class_info
-        if reftype_reply.typeID not in self.dbg.classes_by_id:
-            print(f"ERROR: Class id not found: {reftype_reply.typeID}")
-            return
-
-        self.class_info = self.dbg.classes_by_id[reftype_reply.typeID]
-        
-        # Ensure class_info updated.
-        await self.dbg.update_class_fields(reftype_reply.typeID)
-        await self.dbg.update_class_methods(reftype_reply.typeID)
-
-        # Get object values
-        getvalues_req = self.dbg.jdwp.ObjectReference.GetValuesRequest()
-
-        getvalues_req.objectid = ObjectID(self.object_id)
-        
-        field_ids = [*self.class_info.fields_by_id.keys()]
-        for field_id in field_ids:
-            getvalues_req.fields.append(FieldID(field_id))
-        getvalues_reply, error_code = await self.dbg.jdwp.ObjectReference.GetValues(getvalues_req)
-        if error_code != Jdwp.Error.NONE:
-            print(f"ERROR: Failed to get object values: {Jdwp.Error.string[error_code]}")
-
-        # !! This doesn't feel correct.
-
-        # Map object values to field names.
-        for idx, field_id in enumerate(field_ids):
-            field_info = self.class_info.fields_by_id[field_id]
-            field_value = getvalues_reply.values[idx]
-            field_tup = (field_info.fieldID, field_info.name)
-            self.fields[field_tup] = field_value
-            
+        # Do the leaf class first.
+        class_id = await self.dbg.get_class_id(self.object_id)
+        #print(f"CLASS_ID: {class_id}  .. before loop")
+        while class_id:
+            # Now do all super classes
+            self.subobjects_by_id[class_id] = await SubobjectInfo(self.dbg, self.object_id, class_id).load()
+            self.subobjects.append(self.subobjects_by_id[class_id])
+            #print(f"CLASS_ID: {class_id}  .. before get_super_id")
+            class_id = await self.dbg.get_super_id(class_id)
+            #print(f"CLASS_ID: {class_id}  .. after get_super_id")
+        #print(f"CLASS_ID: {class_id}  .. after loop")
         return self
 
 
@@ -84,23 +131,30 @@ class ObjectInfo():
     def __repr__(self):
         
         try:
-            if not self.class_info:
+            if len(self.subobjects) == 0:
                 return f'ObjectInfo(object_id {self.object_id} [unloaded])'
 
-            summary = [f'{self.class_info.signature} (classID {self.class_info.typeID})']
+            # summary = [f'{self.class_info.signature} (classID {self.class_info.typeID})']
 
-            summary.append(f'\n  Methods: [skipped]')
-            #for method_id, method in self.class_info.methods_by_id.items():
-            #    summary.append(f'    - {method.name}{method.signature}')
+            # summary.append(f'\n  Methods: [skipped]')
+            # #for method_id, method in self.class_info.methods_by_id.items():
+            # #    summary.append(f'    - {method.name}{method.signature}')
             
-            summary.append(f'\n  Fields:')
+            # summary.append(f'\n  Fields:')
 
-            for (field_id, field_name), field_value in self.fields.items():
-                field_info = self.class_info.fields_by_id[field_id]
-                summary.append(f'    - {field_info.signature} {field_name} = {Jdwp.Tag.type_str(field_value.tag)}({field_value.value})')
-                #summary.append(f'    - {field_name} = {field_value}')
+            # for (field_id, field_name), field_value in self.fields.items():
+            #     field_info = self.class_info.fields_by_id[field_id]
+            #     summary.append(f'    - {field_info.signature} {field_name} = {Jdwp.Tag.type_str(field_value.tag)}({field_value.value})')
+            #     #summary.append(f'    - {field_name} = {field_value}')
 
+            # return '\n'.join(summary)
+
+            summary = [f'ObjectInfo({self.object_id})']
+
+            for subobj in reversed(self.subobjects):
+                summary.append(f'{subobj}')
             return '\n'.join(summary)
+
         except Exception as e:
             return f"ObjectInfo(ERROR: {e})"
 
