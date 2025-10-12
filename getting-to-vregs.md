@@ -221,3 +221,37 @@ uint32_t vregs_[0];
 ```
 
 You now have visibility into all registers.
+
+'''
+threadPtr = 135557475466928;
+
+function dump_regs(threadAddr) {
+    artThreadShadowFrameOffset = 0xB8;
+    artShadowFrameVregOffset = 0x30;
+
+    frame = ptr(threadPtr + artThreadShadowFrameOffset).readPointer();
+    vreg_offset = artShadowFrameVregOffset;
+    vreg_count = frame.add(0x30).readU32();
+    console.log(`vreg cnt: ${vreg_count}d`);
+    dex_pc = frame.add(vreg_offset + 0x4).readU32().toString(16);
+    console.log(`dex pc: ${dex_pc}h`);
+    for (var i = 0; i < vreg_count; ++i) {
+        val = frame.add(vreg_offset + 0x10 + (i * 4)).readU32();
+        val_hex = val.toString(16).padStart(8, " ");
+        val_dec = val.toString(10).padStart(10, " ");
+        console.log(`raw v${i}: ${val_hex}h  ${val_dec}d`);
+    }
+    for (var i = 0; i < vreg_count; ++i) {
+        val = frame.add(vreg_offset + 0x10 + (vreg_count * 4) + (i * 4)).readU32();
+        val_hex = val.toString(16).padStart(8, " ");
+        val_dec = val.toString(10).padStart(10, " ");
+        console.log(`ref v${i}: ${val_hex}h  ${val_dec}d`);
+    }
+}
+
+framePtr = ptr(135557475466928 + 0xB0);
+console.log(hexdump(threadPtr, {offset:0, length:256, header: true, ansi: true}))
+0x7b49ef2bff60
+
+B0
+'''
