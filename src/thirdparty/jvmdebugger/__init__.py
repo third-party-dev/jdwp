@@ -404,7 +404,13 @@ class JvmDebugger():
             clazz = self.classes_by_id[clazz]
         return await clazz.load()
 
-        
+    
+    async def string(self, object_id):
+        value, error_code = await self.jdwp.StringReference.Value(ObjectID(object_id))
+        if error_code != Jdwp.Error.NONE:
+            print(f"ERROR: Failed to get string value: {Jdwp.Error.string[error_code]}")
+            return None
+        return value
 
 
     async def request_all_threads(self):

@@ -1962,7 +1962,7 @@ class StringReferenceSet():
     def __init__(self, conn):
         self.conn = conn
 
-    async def IsCollected(self, stringObject: ObjectID) -> Tuple[String, int]:
+    async def Value(self, stringObject: ObjectID) -> Tuple[String, int]:
         data, _, _, error_code = await self.conn.send_and_recv(10, 1, data=Jdwp.make_long(stringObject))
         if error_code != Jdwp.Error.NONE:
             return None, error_code
