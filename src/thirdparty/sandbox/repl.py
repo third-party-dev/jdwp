@@ -407,7 +407,7 @@ class Repl():
                 captured = output.getvalue().replace('\n', '\r\n')
                 #print(captured.encode())
                 resp = json.dumps([len(captured), captured])
-                print(resp.encode())
+                #print(resp.encode())
                 #if captured:
                 writer.write(resp.encode())
                 #else:

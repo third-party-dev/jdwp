@@ -165,8 +165,8 @@ async def main():
 
     # Connect to application native access.
     native.device = frida.get_usb_device()
-    #native.session = native.device.attach(adb.proc_pid)
-    native.session = None
+    native.session = native.device.attach(adb.proc_pid)
+    #native.session = None
     if native.session:
         # Add utility function.
         native.script = native.session.create_script("""
@@ -198,14 +198,63 @@ async def main():
                     }
 
                     return result;
-                }
+                },
+                fetchDexHeader: function(addr) {
+                    var dataPtr = ptr(addr + 8).readPointer();
+                    var dataSz = ptr(addr + 16).readU32();
+                    //var dataPtr = ptr(dataAddr);
+                    var data = dataPtr.readByteArray(128); // actually 112
+                    //console.log(data);
+
+                    return {addr: dataPtr, size: dataSz, headerData: Array.from(new Uint8Array(data))};
+                },
+
+                // I don't see myself implementing this. I think I'm happy with mapping
+                // package_name and checksum to lookup androguard generated cache.
+                fetchDexType: function(dexAddr, typeOff, typeIdx) {
+                    var entryAddr = dexAddr + typeOff + (typeIdx * 4);
+                    return {
+                        descriptorIdx: ptr(entryAddr).readU32(), // string_id
+                    };
+                },
+                fetchDexString: function(dexAddr, stringOff, stringIdx) {
+                    var entryAddr = dexAddr + stringOff + (stringIdx * 4);
+                    return {
+                        stringOff: ptr(entryAddr).readU32(), // string_id
+                    };
+                },
+                fetchDexField: function(dexAddr, fieldOff, fieldIdx) {
+                    var entryAddr = dexAddr + fieldOff + (fieldIdx * 8);
+                    return {
+                        classIdx: ptr(entryAddr + 0).readU16(), // type_id
+                        typeIdx: ptr(entryAddr + 2).readU16(), // type_id
+                        nameIdx: ptr(entryAddr + 4).readU32(), // string_id
+                    };
+                },
+                fetchDexProto: function(dexAddr, protoOff, protoIdx) {
+                    var entryAddr = dexAddr + protoOff + (protoIdx * 8);
+                    return {
+                        shortyIdx: ptr(entryAddr + 0).readU32(), // string_id
+                        returnTypeIdx: ptr(entryAddr + 4).readU32(), // type_id
+                        paramsOff: ptr(entryAddr + 8).readU32(), // offset to type_list or 0 for none
+                    };
+                },
+                fetchDexMethod: function(dexAddr, methodOff, methodIdx) {
+                    var entryAddr = dexAddr + methodOff + (methodIdx * 8);
+                    return {
+                        classIdx: ptr(entryAddr + 0).readU16(), // type_id
+                        protoIdx: ptr(entryAddr + 2).readU16(), // proto_id
+                        nameIdx: ptr(entryAddr + 4).readU32(), // string_id
+                    };
+                },
+                
             };
         """)
         native.script.on("message", lambda msg, data: print("FRIDA MESSAGE:", msg, data))
         native.script.load()
         native.rpc = native.script.exports_sync
 
-    print("ping -> ", native.rpc.ping())
+        #print("ping -> ", native.rpc.ping())
 
     # Settle a bit.
     settle_timeout = 3
@@ -240,11 +289,48 @@ async def main():
             # Get thread as object.
             thread_obj = await bp.dbg.deref(thread.threadID)
             
-            ##### PARSE DEX #####
+            ##########################################
+            ############### PARSE DEX ################
+            ##########################################
             
+            #print(event.location)
+            this_class_obj = await bp.dbg.deref(event.location.classID)
+            #print(this_class_obj)
+            dexCacheTValue = this_class_obj.field_value('Ljava/lang/Class;', 'dexCache')
 
+            dexCache = await bp.dbg.deref(dexCacheTValue.value)
+            #print(dexCache)
+            dexFileTValue = dexCache.field_value('Ljava/lang/DexCache;', 'dexFile')
+            #print(dexFileTValue)
 
-            ##### DUMB VREGS #####
+            headerRes = native.rpc.fetch_dex_header(dexFileTValue.value)
+            
+            class DexHeader():
+                def __init__(self, headerBytes: bytes):
+                    import struct
+                    self.magic, self.checksum, self.signature, \
+                    self.file_size, self.header_size, self.endian_tag, \
+                    self.link_size, self.link_off, self.map_off, \
+                    self.string_ids_size, self.string_ids_off, self.type_ids_size, \
+                    self.type_ids_off, self.proto_ids_size, self.proto_ids_off, \
+                    self.field_ids_size, self.field_ids_off, self.method_ids_size, \
+                    self.method_ids_off, self.class_defs_size, self.class_defs_off, \
+                    self.data_size, self.data_off, \
+                    = struct.unpack_from('<QI20sIIIIIIIIIIIIIIIIIIII', headerBytes)
+                
+                def __repr__(self):
+                    from pprint import pformat
+                    return pformat(self.__dict__)
+
+            #headerRes['addr']
+            #headerRes['size']
+            dexHeader = DexHeader(bytes(headerRes['headerData']))
+            print(dexHeader)
+
+            ##########################################
+            ############### DUMB VREGS ###############
+            ##########################################
+
             # Get nativePeer tagged value.
             nativePeerTValue = thread_obj.field_value('Ljava/lang/Thread;', 'nativePeer')
             # Get nativePeer pointer.

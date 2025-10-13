@@ -406,7 +406,7 @@ class JvmDebugger():
 
     
     async def string(self, object_id):
-        value, error_code = await self.jdwp.StringReference.Value(ObjectID(object_id))
+        value, error_code = await self.jdwp.StringReference.IsCollected(ObjectID(object_id))
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: Failed to get string value: {Jdwp.Error.string[error_code]}")
             return None
