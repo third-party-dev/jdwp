@@ -105,6 +105,7 @@ from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
 from thirdparty.sandbox.repl import Repl
 import thirdparty.jvmdebugger
 from thirdparty.jvmdebugger.state import *
+
 from ppadb.client import Client as AdbClient
 import frida
 
@@ -120,11 +121,14 @@ class AdbObject():
 class NativeObject():
     pass
 
+class BreakpointObject():
+    pass
 
 # We're keeping jdwp, dbg, and dbg_state in global scope so
 # they remain accessible to REPL mechanisms.
 adb = AdbObject()
 native = NativeObject()
+bp = BreakpointObject()
 jdwp = None
 dbg = thirdparty.jvmdebugger.JvmDebugger()
 dbg_state = dbg.state
@@ -156,7 +160,6 @@ Areas Of Instrumentation:
 1. (Via Single Call) Get the vregs via the nativePeer of target threadID (using Frida connection).
 2. (Via Single Call) Get the dexCache for *this* object and resolve relevant thing. 
 
-
 '''
 
 
@@ -165,13 +168,62 @@ async def main():
     global jdwp
     global native
     global adb
+    global bp
 
     # Start up the application in debug mode.
     setup_app('sh.kau.playground')
 
     # Connect to application native access.
-    #native.device = frida.get_usb_device()
-    #native.session = native.device.attach(adb.proc_pid)
+    native.device = frida.get_usb_device()
+    native.session = native.device.attach(adb.proc_pid)
+
+    # Add utility function.
+    native.script = native.session.create_script("""
+        rpc.exports = {
+            ping: function () {
+                return "pong";
+            },
+            read: function(addr, size) {
+                return ptr(addr).readByteArray(size);
+            },
+            dumpVregs: function(threadAddr) {
+                var artThreadShadowFrameOffset = 0xB8;
+                var artShadowFrameVregOffset = 0x30;
+
+                var frame = ptr(threadAddr + artThreadShadowFrameOffset).readPointer();
+                var vreg_offset = artShadowFrameVregOffset;
+                var vreg_count = frame.add(0x30).readU32();
+                
+                var result = {vreg_cnt: vreg_count};
+                result.dex_pc = frame.add(vreg_offset + 0x4).readU32();
+
+                //console.log(`vreg cnt: ${result.vreg_cnt}d`);
+                //console.log(`dex pc: ${result.dex_pc.toString(16)}h`);
+
+                for (var i = 0; i < vreg_count; ++i) {
+                    var val = frame.add(vreg_offset + 0x10 + (i * 4)).readU32();
+                    result[`raw_v${i}`] = val;
+                    var val_hex = val.toString(16).padStart(8, " ");
+                    var val_dec = val.toString(10).padStart(10, " ");
+                    //console.log(`raw v${i}: ${val_hex}h  ${val_dec}d`);
+                }
+                for (var i = 0; i < vreg_count; ++i) {
+                    var val = frame.add(vreg_offset + 0x10 + (vreg_count * 4) + (i * 4)).readU32();
+                    result[`ref_v${i}`] = val;
+                    var val_hex = val.toString(16).padStart(8, " ");
+                    var val_dec = val.toString(10).padStart(10, " ");
+                    //console.log(`ref v${i}: ${val_hex}h  ${val_dec}d`);
+                }
+
+                return result;
+            }
+        };
+    """)
+    native.script.on("message", lambda msg, data: print("FRIDA MESSAGE:", msg, data))
+    native.script.load()
+    native.rpc = native.script.exports_sync
+
+    print("ping -> ", native.rpc.ping())
 
     # Settle a bit.
     settle_timeout = 3
@@ -184,26 +236,62 @@ async def main():
     jdwp = dbg.jdwp
     dbg.print_summary()
 
+    # async def handle_breakpoint(event, composite, args):
+    #     bp, = args
+    #     print(f"{bp.location_str(event)}")
+        
+    #     await bp.wait()
+    #     await bp.dbg.resume_vm()
+
     async def handle_breakpoint(event, composite, args):
         bp, = args
-        print(f"{bp.location_str(event)}")
         
-        await bp.wait()
-        await bp.dbg.resume_vm()
+        await bp.dbg.disable_breakpoint_event(event.requestID)
+        thread = await bp.dbg.thread(event.thread)
+        thread.event_args(event, composite, args)
+
+        print(f"Custom Bkpt@ {await bp.location_str(event)}")
+
+        global native
+        
+        # Get thread as object.
+        thread_obj = await bp.dbg.deref(thread.threadID)
+        # Get nativePeer tagged value.
+        nativePeerTValue = thread_obj.field_value('Ljava/lang/Thread;', 'nativePeer')
+        # Get nativePeer pointer.
+        nativePeer = nativePeerTValue.value
+        # Using nativePeer, get the vregs (for Android 13)
+        vregs = native.rpc.dump_vregs(nativePeer)
+        # Dump results.
+        print(f'dex_pc: {vregs['dex_pc']}')
+        reg_names = [
+            'raw_v0', 'raw_v1', 'raw_v2', 'raw_v3', 'raw_v4',
+            'raw_v5', 'raw_v6', 'raw_v7', 'raw_v8',
+            'ref_v0', 'ref_v1', 'ref_v2', 'ref_v3', 'ref_v4',
+            'ref_v5', 'ref_v6', 'ref_v7', 'ref_v8',
+        ]
+        for reg in reg_names:
+            print(f"{reg}: {vregs[reg]:8x}")
+
+        # Disassemble current instruction.
+        from thirdparty.jvmdebugger.breakpoint import instruction_str
+        print(await instruction_str(bp.dbg, event))
 
     fetchQuote = dbg.create_breakpoint(**{
         'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
         'method_name': 'fetchQuote',
         'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
-    }, callback=None)
-    await bp.fetchQuote.set_breakpoint()
+    }, callback=handle_breakpoint)
+    bp.fetchQuote = fetchQuote
+    await fetchQuote.set_breakpoint()
 
     quoteForTheDay = dbg.create_breakpoint(**{
         'class_signature': 'Lsh/kau/playground/quoter/QuotesRepoImpl;',
         'method_name': 'quoteForTheDay',
         'method_signature': '(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;',
     }, callback=None)
-    #await bp.quoteForTheDay.set_breakpoint()
+    bp.quoteForTheDay = quoteForTheDay
+    #await quoteForTheDay.set_breakpoint()
 
     await dbg.resume_vm()
 
@@ -245,6 +333,7 @@ def setup_app(tgt_pkg, device_name='emulator-5554'):
 
     # Get the main activity name. (Note: This is a bit wonky.)
     cmd = f'cmd package resolve-activity -c android.intent.category.LAUNCHER {adb.tgt_pkg}'
+    print(cmd)
     pkg_act_info = adb.device.shell(cmd)
 
     import re
@@ -254,13 +343,15 @@ def setup_app(tgt_pkg, device_name='emulator-5554'):
     for line in pkg_act_info.split('\n'):
         found = pattern.findall(line)
         matches.extend(found)
-    print(matches)
+    #print(matches)
     
     pkg_main_act = matches[0].replace(adb.tgt_pkg, f'{adb.tgt_pkg}/')
     print(pkg_main_act)
 
     # Start the tgt_pkg's main activity.
-    adb.device.shell(f'am start -n {pkg_main_act}')
+    cmd = f'am start -n {pkg_main_act}'
+    print(cmd)
+    adb.device.shell(cmd)
 
     import time
     time.sleep(0.5)
@@ -279,8 +370,8 @@ def setup_app(tgt_pkg, device_name='emulator-5554'):
     
     # Port forward internal JDWP port (same as PID) to localhost:8700
     cmd = f'adb forward tcp:8700 jdwp:{adb.proc_pid}'
-    #print(cmd)
-    adb.device.shell(cmd)
+    print(cmd)
+    adb.device.forward('tcp:8700', f'jdwp:{adb.proc_pid}')
 
     time.sleep(3)
 

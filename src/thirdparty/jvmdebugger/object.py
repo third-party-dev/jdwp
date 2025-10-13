@@ -92,6 +92,18 @@ class ObjectInfo():
         self.subobjects = []
         # Subobjects lookup by class id
         self.subobjects_by_id = {}
+        # Subobjects lookup by class signature
+        self.subobjects_by_signature = {}
+
+
+    def field_value(self, as_class, field_name):
+        subobject = self.subobjects_by_signature[as_class]
+
+        for k,v in subobject.fields.items():
+            if k[1] == field_name:
+                return v
+
+        return None
 
 
     async def load(self):
@@ -105,6 +117,8 @@ class ObjectInfo():
             # Now do all super classes
             self.subobjects_by_id[class_id] = await SubobjectInfo(self.dbg, self.object_id, class_id).load()
             self.subobjects.append(self.subobjects_by_id[class_id])
+            class_signature = self.dbg.classes_by_id[class_id].signature
+            self.subobjects_by_signature[class_signature] = self.subobjects_by_id[class_id]
             #print(f"CLASS_ID: {class_id}  .. before get_super_id")
             class_id = await self.dbg.get_super_id(class_id)
             #print(f"CLASS_ID: {class_id}  .. after get_super_id")
