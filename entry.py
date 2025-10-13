@@ -82,16 +82,6 @@ On breakpoint:
 '''
 
 '''
-adb shell am set-debug-app -w sh.kau.playground ; \
-  frida -U -f sh.kau.playground ; \
-  
-  adb forward \
-    tcp:8700 \
-      jdwp:$(adb shell ps -A | grep sh.kau.playground | awk '{print $2}') ; \
-  sleep 3 && ./test.py
-'''
-
-'''
 await dbg.cli_frame(26092)
 await dbg.cli_frame_values(26092, 131072)
 await dbg.cli_object_values()
@@ -175,53 +165,45 @@ async def main():
 
     # Connect to application native access.
     native.device = frida.get_usb_device()
-    native.session = native.device.attach(adb.proc_pid)
+    #native.session = native.device.attach(adb.proc_pid)
+    native.session = None
+    if native.session:
+        # Add utility function.
+        native.script = native.session.create_script("""
+            rpc.exports = {
+                ping: function () {
+                    return "pong";
+                },
+                read: function(addr, size) {
+                    return ptr(addr).readByteArray(size);
+                },
+                dumpVregs: function(threadAddr) {
+                    var artThreadShadowFrameOffset = 0xB8;
+                    var artShadowFrameVregOffset = 0x30;
 
-    # Add utility function.
-    native.script = native.session.create_script("""
-        rpc.exports = {
-            ping: function () {
-                return "pong";
-            },
-            read: function(addr, size) {
-                return ptr(addr).readByteArray(size);
-            },
-            dumpVregs: function(threadAddr) {
-                var artThreadShadowFrameOffset = 0xB8;
-                var artShadowFrameVregOffset = 0x30;
+                    var frame = ptr(threadAddr + artThreadShadowFrameOffset).readPointer();
+                    var vreg_offset = artShadowFrameVregOffset;
+                    var vreg_count = frame.add(0x30).readU32();
+                    
+                    var result = {vreg_cnt: vreg_count};
+                    result.dex_pc = frame.add(vreg_offset + 0x4).readU32();
 
-                var frame = ptr(threadAddr + artThreadShadowFrameOffset).readPointer();
-                var vreg_offset = artShadowFrameVregOffset;
-                var vreg_count = frame.add(0x30).readU32();
-                
-                var result = {vreg_cnt: vreg_count};
-                result.dex_pc = frame.add(vreg_offset + 0x4).readU32();
+                    for (var i = 0; i < vreg_count; ++i) {
+                        var off = vreg_offset + 0x10 + (i * 4);
+                        result[`raw_v${i}`] = frame.add(off).readU32();
+                    }
+                    for (var i = 0; i < vreg_count; ++i) {
+                        var off = vreg_offset + 0x10 + (vreg_count * 4) + (i * 4);
+                        result[`ref_v${i}`] = frame.add(off).readU32();
+                    }
 
-                //console.log(`vreg cnt: ${result.vreg_cnt}d`);
-                //console.log(`dex pc: ${result.dex_pc.toString(16)}h`);
-
-                for (var i = 0; i < vreg_count; ++i) {
-                    var val = frame.add(vreg_offset + 0x10 + (i * 4)).readU32();
-                    result[`raw_v${i}`] = val;
-                    var val_hex = val.toString(16).padStart(8, " ");
-                    var val_dec = val.toString(10).padStart(10, " ");
-                    //console.log(`raw v${i}: ${val_hex}h  ${val_dec}d`);
+                    return result;
                 }
-                for (var i = 0; i < vreg_count; ++i) {
-                    var val = frame.add(vreg_offset + 0x10 + (vreg_count * 4) + (i * 4)).readU32();
-                    result[`ref_v${i}`] = val;
-                    var val_hex = val.toString(16).padStart(8, " ");
-                    var val_dec = val.toString(10).padStart(10, " ");
-                    //console.log(`ref v${i}: ${val_hex}h  ${val_dec}d`);
-                }
-
-                return result;
-            }
-        };
-    """)
-    native.script.on("message", lambda msg, data: print("FRIDA MESSAGE:", msg, data))
-    native.script.load()
-    native.rpc = native.script.exports_sync
+            };
+        """)
+        native.script.on("message", lambda msg, data: print("FRIDA MESSAGE:", msg, data))
+        native.script.load()
+        native.rpc = native.script.exports_sync
 
     print("ping -> ", native.rpc.ping())
 
@@ -254,24 +236,31 @@ async def main():
 
         global native
         
-        # Get thread as object.
-        thread_obj = await bp.dbg.deref(thread.threadID)
-        # Get nativePeer tagged value.
-        nativePeerTValue = thread_obj.field_value('Ljava/lang/Thread;', 'nativePeer')
-        # Get nativePeer pointer.
-        nativePeer = nativePeerTValue.value
-        # Using nativePeer, get the vregs (for Android 13)
-        vregs = native.rpc.dump_vregs(nativePeer)
-        # Dump results.
-        print(f'dex_pc: {vregs['dex_pc']}')
-        reg_names = [
-            'raw_v0', 'raw_v1', 'raw_v2', 'raw_v3', 'raw_v4',
-            'raw_v5', 'raw_v6', 'raw_v7', 'raw_v8',
-            'ref_v0', 'ref_v1', 'ref_v2', 'ref_v3', 'ref_v4',
-            'ref_v5', 'ref_v6', 'ref_v7', 'ref_v8',
-        ]
-        for reg in reg_names:
-            print(f"{reg}: {vregs[reg]:8x}")
+        if native.session:
+            # Get thread as object.
+            thread_obj = await bp.dbg.deref(thread.threadID)
+            
+            ##### PARSE DEX #####
+            
+
+
+            ##### DUMB VREGS #####
+            # Get nativePeer tagged value.
+            nativePeerTValue = thread_obj.field_value('Ljava/lang/Thread;', 'nativePeer')
+            # Get nativePeer pointer.
+            nativePeer = nativePeerTValue.value
+            # Using nativePeer, get the vregs (for Android 13)
+            vregs = native.rpc.dump_vregs(nativePeer)
+            # Dump results.
+            print(f'dex_pc: {vregs['dex_pc']}')
+            reg_names = [
+                'raw_v0', 'raw_v1', 'raw_v2', 'raw_v3', 'raw_v4',
+                'raw_v5', 'raw_v6', 'raw_v7', 'raw_v8',
+                'ref_v0', 'ref_v1', 'ref_v2', 'ref_v3', 'ref_v4',
+                'ref_v5', 'ref_v6', 'ref_v7', 'ref_v8',
+            ]
+            for reg in reg_names:
+                print(f"{reg}: {vregs[reg]:8x}")
 
         # Disassemble current instruction.
         from thirdparty.jvmdebugger.breakpoint import instruction_str
