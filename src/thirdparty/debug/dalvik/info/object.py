@@ -11,7 +11,7 @@ import asyncio
 from thirdparty.jdwp import (
     Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
     Long, ClassID, ObjectID, FrameID, MethodID)
-from thirdparty.debug.dalvik.state import *
+from thirdparty.debug.dalvik.info.state import *
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 import pdb
@@ -47,7 +47,7 @@ class SubobjectInfo():
         if not self.class_info:
             #class_id = await self.dbg.get_class_id(self.object_id)
             self.class_info = await self.dbg.class_info(self.class_id)
-        
+
         # Get object values
         getvalues_req = self.dbg.jdwp.ObjectReference.GetValuesRequest()
         getvalues_req.objectid = ObjectID(self.object_id)
@@ -55,7 +55,14 @@ class SubobjectInfo():
         field_ids = [*self.class_info.fields_by_id.keys()]
         for field_id in field_ids:
             getvalues_req.fields.append(FieldID(field_id))
+        
+        if self.object_id == 21573:
+            breakpoint()
+        # !! BUG - This call crashes the application.
         getvalues_reply, error_code = await self.dbg.jdwp.ObjectReference.GetValues(getvalues_req)
+        if self.object_id == 21573:
+            breakpoint()
+
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: Failed to get object values: {Jdwp.Error.string[error_code]}")
 

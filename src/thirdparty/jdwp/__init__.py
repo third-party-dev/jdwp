@@ -189,6 +189,7 @@ class Tag():
 
 class Error():
     NONE = 0
+    OPAQUE_FRAME = 32
     INVALID_SLOT = 35
     TYPE_MISMATCH = 34
 

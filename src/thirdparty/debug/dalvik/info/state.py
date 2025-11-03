@@ -114,7 +114,7 @@ class ClassInfo():
         return self
 
 
-class JvmDebuggerState():
+class DebuggerState():
   def __init__(self):
     self.jdwp = None
 

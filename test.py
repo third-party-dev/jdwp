@@ -14,8 +14,8 @@ import asyncio
 from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID
 import thirdparty.sandbox as __sandbox__
 from thirdparty.sandbox.repl import Repl
-import thirdparty.jvmdebugger
-from thirdparty.jvmdebugger.state import *
+import thirdparty.debug.dalvik
+from thirdparty.debug.dalvik.state import *
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 
@@ -53,7 +53,7 @@ async def __thirdparty_sandbox_async_def(): pass
 # We're keeping jdwp, dbg, and dbg_state in global scope so
 # they remain accessible to REPL mechanisms.
 jdwp = None
-dbg = thirdparty.jvmdebugger.JvmDebugger()
+dbg = thirdparty.debug.dalvik.Debugger()
 dbg_state = dbg.state
 
 bp = DumbObject()
@@ -110,7 +110,7 @@ async def main_with_sandbox():
 def reload_dbg():
     global dbg
     global dbg_state
-    dbg = thirdparty.jvmdebugger.JvmDebugger(dbg_state)
+    dbg = thirdparty.debug.dalvik.Debugger(dbg_state)
 
 
 if __name__ == "__main__":

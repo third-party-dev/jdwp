@@ -12,8 +12,8 @@ from thirdparty.jdwp import (
     Long, ClassID, ObjectID, FrameID, MethodID)
 
 import thirdparty.dalvik.dex
-from thirdparty.debug.dalvik.state import *
-from thirdparty.debug.dalvik.thread import ThreadInfo
+from thirdparty.debug.dalvik.info.state import *
+from thirdparty.debug.dalvik.info.thread import ThreadInfo
 
 
 import thirdparty.sandbox as __sandbox__
@@ -59,18 +59,18 @@ async def instruction_str(dbg, event):
 
 
 async def std_break_event(event, composite, args):
-    bp, = args
+    bp_info, = args
     
-    await bp.dbg.disable_breakpoint_event(event.requestID)
-    thread = await bp.dbg.thread(event.thread)
+    await bp_info.dbg.disable_breakpoint_event(event.requestID)
+    thread = await bp_info.dbg.thread(event.thread)
     thread.event_args(event, composite, args)
 
-    print(f"Bkpt@ {await bp.location_str(event)}")
-    print(await instruction_str(bp.dbg, event))
+    print(f"Bkpt@ {await bp_info.location_str(event)}")
+    print(await instruction_str(bp_info.dbg, event))
 
     # DEBUG CODE
 
-    # slot = bp.dbg.slot(event.thread)
+    # slot = bp_info.dbg.slot(event.thread)
     # print(f"SLOT: {slot}")
     # objref = await slot.get_ref()
     # print(f"OBJ: {objref}")
@@ -185,7 +185,7 @@ class BreakpointInfo():
         return None
 
 
-    # callback = JvmDebugger.handle_breakpoint_event
+    # callback = Debugger.handle_breakpoint_event
     async def _enable_breakpoint(self):
         evt_req = self.dbg.jdwp.EventRequest.SetRequest()
         evt_req.eventKind = Byte(Jdwp.EventKind.BREAKPOINT)
@@ -216,13 +216,13 @@ class BreakpointInfo():
 
     @staticmethod
     async def _handle_class_prepare(event, composite, args):
-        from thirdparty.debug.dalvik import JvmDebugger
+        from thirdparty.debug.dalvik import Debugger
 
         # Fetch arguments
         self, = args
 
         # Make sure the class is registered (in case this beats the general CLASS_PREPARE).
-        await JvmDebugger.handle_class_prepare(event, composite, self.dbg)
+        await Debugger.handle_class_prepare(event, composite, self.dbg)
 
         # Stop class prepare events.
         #print(f"Disable class prepare reqid {event.requestID}")
@@ -236,14 +236,17 @@ class BreakpointInfo():
         #    self.class_info = self.dbg.classes_by_signature[self.class_signature]
         if (self.method_name, self.method_signature) in self.class_info.methods_by_signature:
             self.method_info = self.class_info.methods_by_signature[(self.method_name, self.method_signature)]
-            
             await self._enable_breakpoint()
+
+        # Resume from suspend in _defer_breakpoint
+        await self.dbg.resume_vm()
 
 
     async def _defer_breakpoint(self):
         evt_req = self.dbg.jdwp.EventRequest.SetRequest()
         evt_req.eventKind = Byte(Jdwp.EventKind.CLASS_PREPARE)
-        evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.NONE)
+        # We must suspend to give _handle_class_prepare time to add breakpoint event.
+        evt_req.suspendPolicy = Byte(Jdwp.SuspendPolicy.ALL)
 
         mod = self.dbg.jdwp.EventRequest.SetClassMatchModifier()
         mod.classPattern = String(jvm_to_java(self.class_signature))

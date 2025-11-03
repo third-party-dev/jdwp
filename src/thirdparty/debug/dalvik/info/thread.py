@@ -10,8 +10,8 @@ import asyncio
 from thirdparty.jdwp import (
     Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
     Long, ClassID, ObjectID, FrameID, MethodID)
-from thirdparty.debug.dalvik.state import *
-from thirdparty.debug.dalvik.object import ObjectInfo
+from thirdparty.debug.dalvik.info.state import *
+from thirdparty.debug.dalvik.info.object import ObjectInfo
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 
@@ -195,16 +195,16 @@ class FrameInfo():
             if error_code == Jdwp.Error.TYPE_MISMATCH:
                 print(f"ERROR: Failed to guess slot type. (frame {self.frameID}) Skipping slot v{slot_idx}.")
                 continue
-            if error_code == Jdwp.Error.INVALID_SLOT:
+            if error_code in (Jdwp.Error.OPAQUE_FRAME, Jdwp.Error.INVALID_SLOT):
                 continue
             if error_code != Jdwp.Error.NONE:
                 print(f"ERROR: Failed to get values in frame: {Jdwp.Error.string[error_code]}")
+                continue
                 
-            #breakpoint()
-            self._slots[slot_idx] = SlotInfo(self)
-            self._slots[slot_idx].sigbyte = sigbyte
-            self._slots[slot_idx].tagged_value = getvalues_reply.values[0]
-            #print(getvalues_reply)
+            if error_code == Jdwp.Error.NONE:
+                self._slots[slot_idx] = SlotInfo(self)
+                self._slots[slot_idx].sigbyte = sigbyte
+                self._slots[slot_idx].tagged_value = getvalues_reply.values[0]
 
 
         

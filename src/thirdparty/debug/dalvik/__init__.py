@@ -12,10 +12,10 @@ from thirdparty.jdwp import (
     Long, ClassID, ObjectID, FrameID, MethodID)
 
 from thirdparty.dalvik.dex import disassemble
-from thirdparty.debug.dalvik.state import *
-from thirdparty.debug.dalvik.breakpoint import BreakpointInfo
-from thirdparty.debug.dalvik.thread import ThreadInfo
-from thirdparty.debug.dalvik.object import ObjectInfo
+from thirdparty.debug.dalvik.info.state import *
+from thirdparty.debug.dalvik.info.breakpoint import BreakpointInfo
+from thirdparty.debug.dalvik.info.thread import ThreadInfo
+from thirdparty.debug.dalvik.info.object import ObjectInfo
 
 import thirdparty.sandbox as __sandbox__
 import typing
@@ -77,14 +77,14 @@ from pprint import pprint
 '''
 
 
-
-class JvmDebugger():
+class Debugger():
 
     def __init__(self, state=None):
         if state:
             self.state = state
         else:
-            self.state = JvmDebuggerState()
+            # TODO: Does DebuggerState event exist?
+            self.state = DebuggerState()
 
         self.jdwp = self.state.jdwp
         self.classes_by_id = self.state.classes_by_id
@@ -164,7 +164,7 @@ class JvmDebugger():
             return
         #print(f"enable_class_prepare_events RequestID = {self.class_prepare_reqid}")
 
-        self.jdwp.register_event_handler(self.class_prepare_reqid, JvmDebugger.handle_class_prepare, self)
+        self.jdwp.register_event_handler(self.class_prepare_reqid, Debugger.handle_class_prepare, self)
 
 
     async def enable_class_unload_events(self):
@@ -318,15 +318,16 @@ class JvmDebugger():
 
     @staticmethod
     async def handle_class_prepare(event, composite, dbg):
-        """Callback for JvmDebugger.enable_class_prepare_events()"""
+        """Callback for Debugger.enable_class_prepare_events()"""
         if event.typeID not in dbg.classes_by_id:
 
             # Unloaded until we think we'll deref.
             # TODO: Consider registering for generic event too.
-            dbg.classes_by_id[event.typeID] = dbg.create_class_info(\
+            classInfo = dbg.create_class_info(\
                 event.typeID,
                 typeTag=event.refTypeTag,
                 signature=event.signature)
+            dbg.classes_by_id[event.typeID] = classInfo
 
             # classInfo = ClassInfo()
             # classInfo.refTypeTag = event.refTypeTag
@@ -335,7 +336,7 @@ class JvmDebugger():
             # #classInfo.generic = # TODO: Is there an event with class prepare with generic?
             # # TODO: Do we see if it already exists first?
             # dbg.classes_by_id[classInfo.typeID] = classInfo
-            # dbg.classes_by_signature[classInfo.signature] = classInfo
+            dbg.classes_by_signature[classInfo.signature] = classInfo
             # # TODO: Implement way to show first A chars and last B chars in X width.
             # #print(f"CLASS_PREPARE: {classInfo.signature[:60]}")
 
@@ -352,11 +353,13 @@ class JvmDebugger():
         for clazz in all_classes_reply.classes:
 
             # Unloaded until we think we'll deref.
-            self.classes_by_id[clazz.typeID] = self.create_class_info(\
+            classInfo = self.create_class_info(\
                 clazz.typeID,
                 typeTag=clazz.refTypeTag,
                 signature=clazz.signature,
                 generic=clazz.genericString)
+
+            self.classes_by_id[clazz.typeID] = classInfo
 
             # classInfo = ClassInfo()
             # classInfo.refTypeTag = clazz.refTypeTag
@@ -365,7 +368,7 @@ class JvmDebugger():
             # classInfo.generic = clazz.genericString
             # # TODO: Do we see if it already exists first?
             # self.classes_by_id[classInfo.typeID] = classInfo
-            # self.classes_by_signature[classInfo.signature] = classInfo        
+            self.classes_by_signature[classInfo.signature] = classInfo        
         
 
     async def get_class_id(self, object_id):
