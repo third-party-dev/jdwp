@@ -1,9 +1,17 @@
 
+'''
+Copyright (c) 2025 Vincent Agriesti
+
+This file is part of the thirdparty JDWP project.
+Licensed under the MIT License. See the LICENSE file in the project root
+for full license text.
+'''
+
 import asyncio
 from thirdparty.jdwp import (
     Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
     Long, ClassID, ObjectID, FrameID, MethodID)
-from thirdparty.jvmdebugger.state import *
+from thirdparty.debug.dalvik.state import *
 from pydantic import BaseModel
 from typing import Optional, List, Tuple
 import pdb

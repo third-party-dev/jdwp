@@ -1,13 +1,21 @@
+'''
+Copyright (c) 2025 Vincent Agriesti
+
+This file is part of the thirdparty JDWP project.
+Licensed under the MIT License. See the LICENSE file in the project root
+for full license text.
+'''
+
 import asyncio
 from thirdparty.jdwp import (
     Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, Location, 
     Long, ClassID, ObjectID, FrameID, MethodID)
 
 from thirdparty.dalvik.dex import disassemble
-from thirdparty.jvmdebugger.state import *
-from thirdparty.jvmdebugger.breakpoint import BreakpointInfo
-from thirdparty.jvmdebugger.thread import ThreadInfo
-from thirdparty.jvmdebugger.object import ObjectInfo
+from thirdparty.debug.dalvik.state import *
+from thirdparty.debug.dalvik.breakpoint import BreakpointInfo
+from thirdparty.debug.dalvik.thread import ThreadInfo
+from thirdparty.debug.dalvik.object import ObjectInfo
 
 import thirdparty.sandbox as __sandbox__
 import typing

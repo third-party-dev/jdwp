@@ -1,3 +1,10 @@
+'''
+Copyright (c) 2025 Vincent Agriesti
+
+This file is part of the thirdparty JDWP project.
+Licensed under the MIT License. See the LICENSE file in the project root
+for full license text.
+'''
 
 from thirdparty.jdwp import Jdwp, Byte, Boolean, Int, String, ReferenceTypeID, ThreadID, MethodID, ClassID, FieldID
 from pydantic import BaseModel

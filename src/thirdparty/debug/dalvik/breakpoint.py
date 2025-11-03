@@ -1,3 +1,10 @@
+'''
+Copyright (c) 2025 Vincent Agriesti
+
+This file is part of the thirdparty JDWP project.
+Licensed under the MIT License. See the LICENSE file in the project root
+for full license text.
+'''
 
 import asyncio
 from thirdparty.jdwp import (
@@ -5,8 +12,8 @@ from thirdparty.jdwp import (
     Long, ClassID, ObjectID, FrameID, MethodID)
 
 import thirdparty.dalvik.dex
-from thirdparty.jvmdebugger.state import *
-from thirdparty.jvmdebugger.thread import ThreadInfo
+from thirdparty.debug.dalvik.state import *
+from thirdparty.debug.dalvik.thread import ThreadInfo
 
 
 import thirdparty.sandbox as __sandbox__
@@ -209,7 +216,7 @@ class BreakpointInfo():
 
     @staticmethod
     async def _handle_class_prepare(event, composite, args):
-        from thirdparty.jvmdebugger import JvmDebugger
+        from thirdparty.debug.dalvik import JvmDebugger
 
         # Fetch arguments
         self, = args
