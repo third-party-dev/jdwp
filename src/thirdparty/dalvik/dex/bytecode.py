@@ -271,7 +271,7 @@ def op_13(data: bytes, offset: int = 0):
 
 def op_14(data: bytes, offset: int = 0):
     params, offset = parser['31i'](data, offset)
-    return f"const/16 v{params['aa']}, #+{params['bbbb']:04x}", offset
+    return f"const/16 v{params['aa']}, #+{params['bbbbhi']:04x}{params['bbbblo']:04x}", offset
 
 def op_15(data: bytes, offset: int = 0):
     params, offset = parser['21h'](data, offset)
@@ -625,5 +625,10 @@ ops = [
 ]
 
 def disassemble(data: bytes, offset: int=0):
-    return ops[data[offset]](data, offset)
+    try:
+        return ops[data[offset]](data, offset)
+    except:
+        print(f'Failed disassembly here: {data[offset:]}')
+        raise
+
 
