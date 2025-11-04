@@ -251,7 +251,7 @@ class ThreadInfo():
 
         # Context set by std_break_event that are not valid
         # once the VM has been resumed.
-        self._frames = None
+        self._frames = []
 
         self.this_frame = None
 
