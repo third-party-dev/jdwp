@@ -41,6 +41,23 @@ class SubobjectInfo():
         self.fields = {}
 
 
+    # See reference below for comments.
+    def _populate_getvalues_req_fields(self, field_ids, getvalues_req):
+        for field_id in field_ids:
+            getvalues_req.fields.append(FieldID(field_id))
+
+    # See reference below for comments.
+    def _debug_unsafe_getvalues_req_fields(self, field_ids, getvalues_req):
+
+        if self.object_id == 21573:
+            for i in range(0, len(field_ids)):
+                field_id = field_ids[i]
+                print(f"{i}: {field_id} -> {self.class_info.fields_by_id[field_id].signature}")
+                getvalues_req.fields.append(FieldID(field_id))
+        else:
+            self._populate_getvalues_req_fields(field_ids, getvalues_req)
+            
+
     async def load(self):
 
         # Get _loaded_ class_info.
@@ -53,15 +70,36 @@ class SubobjectInfo():
         getvalues_req.objectid = ObjectID(self.object_id)
         
         field_ids = [*self.class_info.fields_by_id.keys()]
-        for field_id in field_ids:
-            getvalues_req.fields.append(FieldID(field_id))
+
+        '''
+        There are conditions in JDWP where the ObjectReference.GetValues() call
+        will crash the application. I'm guessing this'll happen a bunch as this
+        code is being developed so I'm keeping the debug rig inplace for
+        troubleshooting. As troublesome signatures are discovered, they are
+        filtered out in ClassInfo._update_class_fields() so they are never seen
+        by this loop.
+
+        In the event that a field dereference is crashing the application, we
+        want to uncomment the _debug*() call and the breakpoint conditions and
+        comment the _populate*() call. At the moment, the breakpoints should only
+        break on the thread object ID of the application I discovered this bug with.
+        It needs to be updated to match whatever application for future bugs.
+
+        Once the debug environment is setup, manually verify ranges of fields
+        to identify the trouble field. Once the troublefield is located, filter
+        it out in ClassInfo._update_class_fields(). Its slow and annoying, but
+        works. I could automate fixing this, but I'm crossing my fingers that
+        its limited to Thread objects (and maybe ClassLoaders or ExceptionHandlers).
+        '''
+
+        #self._debug_unsafe_getvalues_req_fields(field_ids, getvalues_req)
+        self._populate_getvalues_req_fields(field_ids, getvalues_req)
         
-        if self.object_id == 21573:
-            breakpoint()
-        # !! BUG - This call crashes the application.
+        #if self.object_id == 21573:
+        #    breakpoint()
         getvalues_reply, error_code = await self.dbg.jdwp.ObjectReference.GetValues(getvalues_req)
-        if self.object_id == 21573:
-            breakpoint()
+        #if self.object_id == 21573:
+        #    breakpoint()
 
         if error_code != Jdwp.Error.NONE:
             print(f"ERROR: Failed to get object values: {Jdwp.Error.string[error_code]}")
