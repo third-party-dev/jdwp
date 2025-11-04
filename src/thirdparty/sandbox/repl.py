@@ -291,9 +291,10 @@ class Repl():
             writer = None
             if socket_path:
                 reader, writer = await asyncio.open_unix_connection(socket_path)
+                print(f"Connected to {socket_path}")
             else:
                 reader, writer = await asyncio.open_connection(host, port)
-            print(f"Connected to {host}:{port}")
+                print(f"Connected to {host}:{port}")
             banner = await Repl._read_available(reader)
             print(banner.decode())
         
@@ -399,8 +400,26 @@ class Repl():
                 final_buffer = json.loads(final_buffer_json.decode())
                 final_src = '\n'.join([*final_buffer, ''])
 
+                import sys
+                import io
+                import contextlib
+                class Tee(io.TextIOBase):
+                    def __init__(self, *streams):
+                        self.streams = streams
+                    def write(self, data):
+                        for s in self.streams:
+                            s.write(data)
+                            s.flush()
+                        return len(data)
+                    def flush(self):
+                        for s in self.streams:
+                            s.flush()
+
                 output = io.StringIO()
-                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                tee_out = Tee(sys.stdout, output)
+                tee_err = Tee(sys.stderr, output)
+
+                with contextlib.redirect_stdout(tee_out), contextlib.redirect_stderr(tee_err):
                     try:
                         if len(final_src) > 0:
                             if len(final_buffer) == 1:
@@ -413,7 +432,7 @@ class Repl():
                         print(f"Exception: {e} Line:{traceback.format_exc()}")
                     
                 captured = output.getvalue().replace('\n', '\r\n')
-                #print(captured.encode())
+                print(captured.encode())
                 resp = json.dumps([len(captured), captured])
                 #print(resp.encode())
                 #if captured:

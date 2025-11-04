@@ -52,6 +52,15 @@ class ClassInfo():
 
         self.super_class = None
 
+        # Dereference of these will cause crash.
+        self.unsafe_fields_by_id = {}
+        self.unsafe_fields_by_signature = {}
+
+
+    def _is_unsafe_field(self, field):
+        return "java/lang/Thread" in self.signature and \
+            ("ExceptionHandler" in field.signature \
+            or "java/lang/RuntimePermission" in field.signature)
 
     async def _update_class_fields(self):
         if self.fields_loaded:
@@ -68,8 +77,13 @@ class ClassInfo():
             field.name = entry.name
             field.signature = entry.signature
             field.modBits = entry.modBits
-            self.fields_by_id[field.fieldID] = field
-            self.fields_by_signature[(field.name, field.signature)] = field
+
+            if self._is_unsafe_field(field):
+                self.unsafe_fields_by_id[field.fieldID] = field
+                self.unsafe_fields_by_signature[(field.name, field.signature)] = field
+            else:
+                self.fields_by_id[field.fieldID] = field
+                self.fields_by_signature[(field.name, field.signature)] = field
             
         self.fields_loaded = True
 
